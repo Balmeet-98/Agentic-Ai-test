@@ -1,36 +1,90 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 👕 T-Shirt Designer — AI Mockup Generator
 
-## Getting Started
+A Next.js 15 web app that lets users apply a custom design onto a T-shirt image using **Google Gemini 2.0 Flash** image generation.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Features
+
+- **Upload T-Shirt** — drag & drop, click to browse, or paste an image URL
+- **Upload Design** — your logo, graphic, or artwork
+- **AI Compositing** — Gemini 2.0 Flash realistically places the design on the fabric, respecting wrinkles, folds, and texture
+- **Download** — export the finished mockup as a PNG
+- **Advanced options** — custom placement hint (e.g. "top-left chest", "center back")
+
+---
+
+## Setup
+
+### 1. Get a Gemini API key
+
+Visit [Google AI Studio](https://aistudio.google.com/app/apikey) and create a free API key.
+
+### 2. Configure environment
+
+Edit `.env.local` in the project root:
+
+```env
+GEMINI_API_KEY=your_key_here
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. Install & run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open [http://localhost:3000](http://localhost:3000).
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## Project Structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+tshirt-designer/
+├── app/
+│   ├── api/generate/route.ts   # Server route — calls Gemini
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx                # Main UI page
+├── components/
+│   ├── ImageDropzone.tsx        # Drag-and-drop / URL image input
+│   ├── ResultPanel.tsx          # Result preview + download
+│   └── StepBadge.tsx            # Step indicator badge
+├── lib/
+│   └── gemini.ts                # Gemini API helper
+├── .env.local                   # API key (not committed)
+└── README.md
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Tech Stack
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Layer | Tech |
+|-------|------|
+| Framework | Next.js 15 (App Router) |
+| Language | TypeScript |
+| Styling | Tailwind CSS v4 |
+| AI Model | Google Gemini 2.0 Flash (image generation) |
+| SDK | `@google/generative-ai` |
+| Icons | `lucide-react` |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## How It Works
+
+1. User provides a T-shirt image (upload or URL) and a design image.
+2. Both images are sent to the `/api/generate` Next.js server action.
+3. The API route converts files to base64 and calls Gemini with a structured prompt.
+4. Gemini returns a generated image with the design composited onto the T-shirt.
+5. The result is displayed and available for download.
+
+---
+
+## Notes
+
+- Images are processed **server-side** — your API key is never exposed to the browser.
+- Max file size: **10 MB** per image.
+- Supported formats: PNG, JPG, WEBP.
