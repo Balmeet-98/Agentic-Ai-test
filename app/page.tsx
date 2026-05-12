@@ -19,19 +19,35 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [modelUsed, setModelUsed] = useState<string | null>(null);
+  const [shakeTshirt, setShakeTshirt] = useState(false);
+  const [shakeDesign, setShakeDesign] = useState(false);
 
   const hasTshirt = !!tshirtFile || !!tshirtUrlPreview;
   const hasDesign = !!designFile;
-  const canGenerate = hasTshirt && hasDesign && !isLoading;
+
+  const triggerShake = (setter: (v: boolean) => void) => {
+    setter(true);
+    setTimeout(() => setter(false), 500);
+  };
 
   const handleTshirtUrl = (url: string) => {
     setTshirtUrl(url);
     setTshirtUrlPreview(url);
     setTshirtFile(null);
+    setShakeTshirt(false);
   };
 
   const handleGenerate = async () => {
-    if (!canGenerate) return;
+    if (isLoading) return;
+    // Client-side presence validation
+    if (!hasTshirt && !hasDesign) {
+      triggerShake(setShakeTshirt);
+      triggerShake(setShakeDesign);
+      return;
+    }
+    if (!hasTshirt) { triggerShake(setShakeTshirt); return; }
+    if (!hasDesign)  { triggerShake(setShakeDesign);  return; }
+
     setIsLoading(true);
     setError(null);
     setResultBase64(null);
@@ -47,7 +63,11 @@ export default function Home() {
 
       const res = await fetch("/api/generate", { method: "POST", body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Unknown server error.");
+      if (!res.ok) {
+        // Shake the T-shirt card if image didn't pass validation
+        if (data.invalidTshirt) triggerShake(setShakeTshirt);
+        throw new Error(data.error ?? "Unknown server error.");
+      }
 
       setResultBase64(data.imageBase64);
       setResultDataUrl(`data:${data.mimeType ?? "image/png"};base64,${data.imageBase64}`);
@@ -71,6 +91,8 @@ export default function Home() {
     setError(null);
     setAdvancedOpen(false);
     setModelUsed(null);
+    setShakeTshirt(false);
+    setShakeDesign(false);
   };
 
   return (
@@ -165,15 +187,23 @@ export default function Home() {
           <div className="flex flex-col gap-4">
 
             {/* T-Shirt upload */}
-            <div className="glass rounded-2xl p-4 sm:p-5">
+            <div className={`glass rounded-2xl p-4 sm:p-5 transition-all duration-200 ${
+              shakeTshirt ? "shake ring-2 ring-red-500/40" : ""
+            }`}>
+              {shakeTshirt && !hasTshirt && (
+                <p className="flex items-center gap-1.5 text-xs text-red-400 mb-3 font-medium">
+                  <AlertCircle size={13} />
+                  Please upload a T-shirt image or provide a URL
+                </p>
+              )}
               <ImageDropzone
                 label="T-Shirt Image"
-                sublabel="Plain or blank shirt — any color works"
+                sublabel="Must be a plain T-shirt, hoodie, or similar garment"
                 file={tshirtFile}
                 previewSrc={tshirtUrlPreview || undefined}
                 onFile={(f) => {
                   setTshirtFile(f);
-                  if (f) { setTshirtUrl(""); setTshirtUrlPreview(""); }
+                  if (f) { setTshirtUrl(""); setTshirtUrlPreview(""); setShakeTshirt(false); }
                 }}
                 onUrl={handleTshirtUrl}
                 allowUrl
@@ -182,12 +212,20 @@ export default function Home() {
             </div>
 
             {/* Design upload */}
-            <div className="glass rounded-2xl p-4 sm:p-5">
+            <div className={`glass rounded-2xl p-4 sm:p-5 transition-all duration-200 ${
+              shakeDesign ? "shake ring-2 ring-red-500/40" : ""
+            }`}>
+              {shakeDesign && !hasDesign && (
+                <p className="flex items-center gap-1.5 text-xs text-red-400 mb-3 font-medium">
+                  <AlertCircle size={13} />
+                  Please upload your design image
+                </p>
+              )}
               <ImageDropzone
                 label="Your Design"
                 sublabel="Logo, graphic, or any artwork"
                 file={designFile}
-                onFile={setDesignFile}
+                onFile={(f) => { setDesignFile(f); if (f) setShakeDesign(false); }}
                 index={2}
               />
             </div>
@@ -236,30 +274,22 @@ export default function Home() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={!canGenerate}
+              disabled={isLoading}
               className={`group relative flex items-center justify-center gap-2.5 py-4 rounded-2xl font-bold text-[15px] transition-all duration-200 overflow-hidden ${
-                canGenerate
-                  ? "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white cursor-pointer hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-violet-500/30 active:translate-y-0 active:scale-[0.99]"
-                  : "bg-white/4 border border-white/8 text-white/20 cursor-not-allowed"
+                isLoading
+                  ? "bg-violet-600/50 text-white/50 cursor-not-allowed"
+                  : "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white cursor-pointer hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-violet-500/30 active:translate-y-0 active:scale-[0.99]"
               }`}
             >
-              {canGenerate && (
+              {!isLoading && (
                 <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
               )}
               <Wand2 size={18} />
               {isLoading ? "Generating…" : "Generate Mockup"}
             </button>
-
-            {/* Hint text */}
-            {!canGenerate && !isLoading && (
-              <p className="text-center text-[11px] text-white/35">
-                {!hasTshirt
-                  ? "Upload a T-shirt image to get started"
-                  : !hasDesign
-                  ? "Now upload your design image"
-                  : ""}
-              </p>
-            )}
+            <p className="text-center text-[11px] text-white/30">
+              Gemini AI validates your T-shirt image before generating
+            </p>
           </div>
 
           {/* ── Right column: result ─────────────────────────────────── */}

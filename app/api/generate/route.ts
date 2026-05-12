@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyDesignToTshirt } from "@/lib/gemini";
+import { validateTshirtImage } from "@/lib/validateTshirt";
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -64,6 +65,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Validate T-shirt image ───────────────────────────────────────────────
+    const validation = await validateTshirtImage(tshirtBase64, tshirtMimeType);
+    if (!validation.valid) {
+      return NextResponse.json(
+        {
+          error: `The uploaded image doesn't appear to be a T-shirt or wearable garment.${
+            validation.reason ? ` (${validation.reason})` : ""
+          } Please upload a plain T-shirt photo.`,
+          invalidTshirt: true,
+        },
+        { status: 422 }
+      );
+    }
+
     // ── Resolve design image ─────────────────────────────────────────────────
     if (!designFile || designFile.size === 0) {
       return NextResponse.json(
@@ -111,9 +126,9 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
-    if (raw.includes("404") || raw.includes("not found")) {
+    if (raw.includes("404") || raw.includes("not found for API version")) {
       return NextResponse.json(
-        { error: "Gemini model not found. It may be unavailable in your region." },
+        { error: "A Gemini model returned 404. This usually means the model was deprecated. Please check lib/gemini.ts and lib/validateTshirt.ts for the model names." },
         { status: 404 }
       );
     }
