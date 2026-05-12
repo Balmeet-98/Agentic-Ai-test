@@ -8,8 +8,6 @@ import StepBadge from "@/components/StepBadge";
 
 export default function Home() {
   const [tshirtFile, setTshirtFile] = useState<File | null>(null);
-  const [tshirtUrl, setTshirtUrl] = useState("");
-  const [tshirtUrlPreview, setTshirtUrlPreview] = useState("");
   const [designFile, setDesignFile] = useState<File | null>(null);
   const [placement, setPlacement] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -22,19 +20,12 @@ export default function Home() {
   const [shakeTshirt, setShakeTshirt] = useState(false);
   const [shakeDesign, setShakeDesign] = useState(false);
 
-  const hasTshirt = !!tshirtFile || !!tshirtUrlPreview;
+  const hasTshirt = !!tshirtFile;
   const hasDesign = !!designFile;
 
   const triggerShake = (setter: (v: boolean) => void) => {
     setter(true);
     setTimeout(() => setter(false), 500);
-  };
-
-  const handleTshirtUrl = (url: string) => {
-    setTshirtUrl(url);
-    setTshirtUrlPreview(url);
-    setTshirtFile(null);
-    setShakeTshirt(false);
   };
 
   const handleGenerate = async () => {
@@ -56,8 +47,7 @@ export default function Home() {
 
     try {
       const fd = new FormData();
-      if (tshirtFile) fd.append("tshirt", tshirtFile);
-      else fd.append("tshirtUrl", tshirtUrl);
+      fd.append("tshirt", tshirtFile!);
       fd.append("design", designFile!);
       if (placement.trim()) fd.append("placement", placement);
 
@@ -82,8 +72,6 @@ export default function Home() {
 
   const handleReset = () => {
     setTshirtFile(null);
-    setTshirtUrl("");
-    setTshirtUrlPreview("");
     setDesignFile(null);
     setPlacement("");
     setResultBase64(null);
@@ -180,6 +168,21 @@ export default function Home() {
           <StepBadge step={4} label="Download" active={!!resultBase64} done={false} />
         </div>
 
+        {/* ── Error toast ── */}
+        {error && (
+          <div className="mb-5 flex items-start gap-3 bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-3.5">
+            <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-red-300 leading-relaxed flex-1">{error}</p>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-400/50 hover:text-red-300 transition-colors flex-shrink-0 ml-1"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Main two-column layout */}
         <div className="grid lg:grid-cols-[1fr_1fr] gap-4 sm:gap-6 items-start">
 
@@ -200,13 +203,7 @@ export default function Home() {
                 label="T-Shirt Image"
                 sublabel="Must be a plain T-shirt, hoodie, or similar garment"
                 file={tshirtFile}
-                previewSrc={tshirtUrlPreview || undefined}
-                onFile={(f) => {
-                  setTshirtFile(f);
-                  if (f) { setTshirtUrl(""); setTshirtUrlPreview(""); setShakeTshirt(false); }
-                }}
-                onUrl={handleTshirtUrl}
-                allowUrl
+                onFile={(f) => { setTshirtFile(f); if (f) setShakeTshirt(false); }}
                 index={1}
               />
             </div>
@@ -261,14 +258,6 @@ export default function Home() {
                 </div>
               )}
             </div>
-
-            {/* Error */}
-            {error && (
-              <div className="flex items-start gap-3 bg-red-500/8 border border-red-500/25 rounded-xl px-4 py-3.5">
-                <AlertCircle size={15} className="text-red-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-red-300/90 leading-relaxed">{error}</p>
-              </div>
-            )}
 
             {/* Generate button */}
             <button
