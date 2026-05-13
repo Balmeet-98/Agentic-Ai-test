@@ -52,6 +52,12 @@ export async function POST(req: NextRequest) {
         { status: 503 }
       );
     }
+    if (raw.includes("thought_signature")) {
+      return NextResponse.json(
+        { error: "Session expired — please start a new chat and try again." },
+        { status: 400 }
+      );
+    }
 
     return NextResponse.json({ error: raw }, { status: 500 });
   }

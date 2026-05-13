@@ -56,6 +56,11 @@ function isOverloaded(err: unknown): boolean {
   );
 }
 
+function isThoughtSignatureError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("thought_signature");
+}
+
 // ── Mockup compositing ────────────────────────────────────────────────────────
 
 async function callMockupModel(
@@ -211,12 +216,17 @@ When the user asks for refinements:
 
 You must always produce a real image. Text-only responses are not acceptable.`;
 
-  // Build Gemini conversation contents from the message history
+  // Build Gemini conversation contents from the message history.
+  // Image inline data is intentionally stripped from model messages: Gemini's
+  // thinking models attach an internal thought_signature to model-generated images,
+  // and re-submitting those images without the signature causes a 400 error.
+  // The model's text description provides enough context for iterative refinement.
+  // Image data in user messages (e.g. reference uploads) is kept as-is.
   const contents = messages.map((msg) => ({
     role: msg.role as "user" | "model",
     parts: [
       ...(msg.text ? [{ text: msg.text }] : []),
-      ...(msg.imageBase64 && msg.imageMimeType
+      ...(msg.role === "user" && msg.imageBase64 && msg.imageMimeType
         ? [{ inlineData: { mimeType: msg.imageMimeType, data: msg.imageBase64 } }]
         : []),
     ],
@@ -281,7 +291,15 @@ You must always produce a real image. Text-only responses are not acceptable.`;
           await sleep(wait);
           continue;
         }
-        // Non-overload error — stop retrying
+        // thought_signature or other deterministic 400 — no point retrying
+        if (isThoughtSignatureError(err)) {
+          console.warn(`[gemini chat] ${model} thought_signature error — aborting`);
+          throw new Error(
+            "Gemini rejected the conversation history (thought_signature mismatch). " +
+            "This is a temporary session issue — please start a new chat."
+          );
+        }
+        // Other non-retryable error
         console.warn(
           `[gemini chat] ${model} failed (non-503): ${err instanceof Error ? err.message : err}`
         );
