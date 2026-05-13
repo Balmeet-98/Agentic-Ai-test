@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, X, Image as ImageIcon, CheckCircle2 } from "lucide-react";
 
 interface Props {
@@ -22,14 +22,14 @@ export default function ImageDropzone({
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!file) { setObjectUrl(null); return; }
-    const url = URL.createObjectURL(file);
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+  // Create a blob URL for preview. useMemo avoids setState-in-effect; the
+  // cleanup-only useEffect below revokes the stale URL when file changes.
+  const objectUrl = useMemo(
+    () => (file ? URL.createObjectURL(file) : null),
+    [file]
+  );
+  useEffect(() => () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, [objectUrl]);
 
   const hasContent = !!objectUrl;
 

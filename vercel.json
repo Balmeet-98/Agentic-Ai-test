@@ -8,6 +8,9 @@
   "functions": {
     "app/api/generate/route.ts": {
       "maxDuration": 60
+    },
+    "app/api/design-chat/route.ts": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

@@ -18,7 +18,7 @@ export default function ResultPanel({ imageBase64, dataUrl, mimeType, isLoading,
     const ext = mimeType.split("/")[1] ?? "png";
     const a = document.createElement("a");
     a.href = imgSrc;
-    a.download = `tshirt-mockup-${Date.now()}.${ext}`;
+    a.download = `merch-mockup-${Date.now()}.${ext}`;
     a.click();
   };
 
@@ -36,7 +36,7 @@ export default function ResultPanel({ imageBase64, dataUrl, mimeType, isLoading,
 
         <div className="text-center space-y-1.5">
           <p className="text-white/90 font-semibold text-base">Creating your mockup…</p>
-          <p className="text-white/55 text-sm">Gemini AI is blending your design onto the fabric</p>
+          <p className="text-white/55 text-sm">Gemini AI is applying your design to the product</p>
         </div>
 
         {/* Shimmer bar */}
@@ -63,7 +63,7 @@ export default function ResultPanel({ imageBase64, dataUrl, mimeType, isLoading,
         <div>
           <p className="text-white/70 font-semibold">Your mockup appears here</p>
           <p className="text-white/40 text-sm mt-1.5 leading-relaxed max-w-[220px] mx-auto">
-            Upload a T-shirt & design, then hit <span className="text-white/60 font-medium">Generate Mockup</span>
+            Upload a product &amp; design, then hit <span className="text-white/60 font-medium">Generate Mockup</span>
           </p>
         </div>
       </div>
@@ -77,7 +77,7 @@ export default function ResultPanel({ imageBase64, dataUrl, mimeType, isLoading,
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imgSrc}
-          alt="Generated T-shirt mockup"
+          alt="Generated product mockup"
           className="w-full object-contain"
           style={{ maxHeight: "400px" }}
         />

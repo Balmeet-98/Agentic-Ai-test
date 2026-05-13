@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { Shirt, ArrowLeft } from "lucide-react";
+import { Package, ArrowLeft } from "lucide-react";
 
 export default function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-[#13111f]">
       <div className="max-w-sm w-full text-center space-y-6">
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/20 to-fuchsia-500/10 border border-white/10 flex items-center justify-center mx-auto">
-          <Shirt size={28} className="text-violet-400" />
+          <Package size={28} className="text-violet-400" />
         </div>
         <div>
           <p className="text-5xl font-black text-white/10 mb-3">404</p>
