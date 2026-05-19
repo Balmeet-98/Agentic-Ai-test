@@ -180,6 +180,130 @@ INSTRUCTIONS:
   throw lastError ?? new Error("Gemini image generation failed.");
 }
 
+// ── Text-change product modifier ──────────────────────────────────────────────
+
+export interface TextChange {
+  field: string;
+  label: string;
+  from: string;
+  to: string;
+}
+
+export interface ModifyProductParams {
+  productBase64: string;
+  productMimeType: string;
+  productName: string;
+  category: string;
+  changes: TextChange[];
+}
+
+/**
+ * Re-renders a merchandise product image with specific text/location names changed.
+ * All artwork, colours, and layout are preserved — only the specified text differs.
+ */
+export async function applyTextChangesToProduct(
+  params: ModifyProductParams
+): Promise<GenerateDesignResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set.");
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const changeList = params.changes
+    .map((c) => `  • ${c.label}: replace "${c.from}" with "${c.to}"`)
+    .join("\n");
+
+  const prompt = `You are a professional merchandise product designer.
+
+TASK: Modify the text on this souvenir product image.
+
+PRODUCT: ${params.productName} (${params.category})
+
+TEXT CHANGES TO APPLY:
+${changeList}
+
+CRITICAL RULES:
+- Keep the product's original shape, colour, material, and overall design 100% intact.
+- Keep all artwork, logos, graphic elements, and layout completely unchanged.
+- ONLY replace the specified text content with the new values provided.
+- Match the original text's font style, size, weight, colour, and positioning as closely as possible.
+- The end result must look like the same product with only the place name / text updated.
+- Output only the final product image — no watermarks, labels, or extra elements.`;
+
+  let lastError: unknown;
+
+  for (let m = 0; m < MODEL_CHAIN.length; m++) {
+    const model = MODEL_CHAIN[m];
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: params.productMimeType,
+                  data: params.productBase64,
+                },
+              },
+            ],
+          },
+          config: {
+            responseModalities: ["TEXT", "IMAGE"],
+            safetySettings: SAFETY_SETTINGS,
+          },
+        });
+
+        const candidate = response.candidates?.[0];
+        const parts = candidate?.content?.parts ?? [];
+
+        console.log(
+          `[gemini modify] ${model} — finishReason: ${candidate?.finishReason ?? "n/a"}, parts: ${parts.length}`
+        );
+
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            console.log(`[gemini modify] ✓ ${model} succeeded (attempt ${attempt + 1})`);
+            return {
+              imageBase64: part.inlineData.data,
+              mimeType: part.inlineData.mimeType ?? "image/png",
+              modelUsed: model,
+            };
+          }
+        }
+
+        const textResponse = parts.map((p) => p.text).filter(Boolean).join(" ").trim();
+        const finishReason = candidate?.finishReason ?? "unknown";
+
+        throw new Error(
+          textResponse
+            ? `Gemini responded with text instead of an image: "${textResponse}"`
+            : `Gemini did not return an image (finish reason: ${finishReason}). Please try again.`
+        );
+      } catch (err) {
+        lastError = err;
+        if (isOverloaded(err)) {
+          const wait = (attempt + 1) * 3000;
+          console.warn(
+            `[gemini modify] ${model} overloaded (attempt ${attempt + 1}), retrying in ${wait}ms…`
+          );
+          await sleep(wait);
+          continue;
+        }
+        console.warn(
+          `[gemini modify] ${model} failed: ${err instanceof Error ? err.message : err}`
+        );
+        break;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Gemini text modification failed.");
+}
+
 // ── AI Design Chatbot ─────────────────────────────────────────────────────────
 
 /**
