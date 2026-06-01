@@ -35,19 +35,28 @@ export default function Home() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
+  const resetEditSession = () => {
+    setResultBase64(null);
+    setResultDataUrl(null);
+    setEditMockupBase64(null);
+    setEditMockupMime(null);
+    setEditHistory([]);
+    editMockupRef.current = null;
+    setModelUsed(null);
+  };
+
   const handleSelectProduct = (item: InventoryItem) => {
+    if (selectedProduct?.id !== item.id) {
+      resetEditSession();
+    }
     setSelectedProduct(item);
   };
 
   const handleConfirmProduct = () => {
     if (!selectedProduct) return;
+    resetEditSession();
     setStep("edit");
     setError(null);
-    setResultBase64(null);
-    setEditMockupBase64(null);
-    setEditMockupMime(null);
-    setEditHistory([]);
-    editMockupRef.current = null;
   };
 
   const handleEditSubmit = async (description: string): Promise<{ dataUrl: string }> => {
@@ -118,14 +127,8 @@ export default function Home() {
   const handleReset = () => {
     setStep("browse");
     setSelectedProduct(null);
-    setResultBase64(null);
-    setResultDataUrl(null);
-    setEditMockupBase64(null);
-    setEditMockupMime(null);
-    setEditHistory([]);
-    editMockupRef.current = null;
+    resetEditSession();
     setError(null);
-    setModelUsed(null);
   };
 
   // ── Derived ────────────────────────────────────────────────────────────
@@ -269,6 +272,7 @@ export default function Home() {
         {step === "edit" && selectedProduct && (
           <div className="glass rounded-2xl p-3 sm:p-5 lg:p-6">
             <EditRequestChat
+              key={selectedProduct.id}
               product={selectedProduct}
               currentMockup={
                 resultDataUrl
@@ -280,6 +284,7 @@ export default function Home() {
               onBack={() => {
                 setStep("browse");
                 setError(null);
+                resetEditSession();
               }}
               onDone={handleDone}
             />
