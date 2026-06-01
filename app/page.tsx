@@ -1,22 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Package,
   AlertCircle,
   Sparkles,
   ArrowRight,
-  Wand2,
   Anchor,
 } from "lucide-react";
 import InventoryBrowser from "@/components/InventoryBrowser";
-import ChangeRequestForm from "@/components/ChangeRequestForm";
+import EditRequestChat from "@/components/EditRequestChat";
 import ResultPanel from "@/components/ResultPanel";
 import StepBadge from "@/components/StepBadge";
-import type { InventoryItem } from "@/lib/inventory";
-import type { TextChange } from "@/components/ChangeRequestForm";
+import type { InventoryItem } from "@/lib/inventory-types";
 
-type AppStep = "browse" | "change" | "result";
+type AppStep = "browse" | "edit" | "final";
 
 export default function Home() {
   const [step, setStep] = useState<AppStep>("browse");
@@ -29,6 +27,12 @@ export default function Home() {
   const [resultMime, setResultMime] = useState("image/png");
   const [modelUsed, setModelUsed] = useState<string | null>(null);
 
+  // Current mockup in edit loop (to pass to AI for iterative edits)
+  const [editMockupBase64, setEditMockupBase64] = useState<string | null>(null);
+  const [editMockupMime, setEditMockupMime] = useState<string | null>(null);
+  const [editHistory, setEditHistory] = useState<string[]>([]);
+  const editMockupRef = useRef<{ base64: string; mime: string } | null>(null);
+
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleSelectProduct = (item: InventoryItem) => {
@@ -37,35 +41,42 @@ export default function Home() {
 
   const handleConfirmProduct = () => {
     if (!selectedProduct) return;
-    setStep("change");
+    setStep("edit");
     setError(null);
+    setResultBase64(null);
+    setEditMockupBase64(null);
+    setEditMockupMime(null);
+    setEditHistory([]);
+    editMockupRef.current = null;
   };
 
-  const handleGenerate = async (changes: TextChange[]) => {
-    if (!selectedProduct || isLoading) return;
+  const handleEditSubmit = async (description: string): Promise<{ dataUrl: string }> => {
+    if (!selectedProduct || isLoading) {
+      throw new Error("Cannot submit while loading.");
+    }
 
     setIsLoading(true);
     setError(null);
-    setResultBase64(null);
-    setResultDataUrl(null);
-    setModelUsed(null);
 
     try {
-      // Fetch the product image from its URL, then send as a file
-      const imageRes = await fetch(selectedProduct.imageUrl);
-      if (!imageRes.ok) {
-        throw new Error("Failed to load product image. Please try again.");
-      }
-      const imageBlob = await imageRes.blob();
-      const mimeType = imageBlob.type || "image/jpeg";
-      const ext = mimeType.split("/")[1] ?? "jpg";
-      const productFile = new File([imageBlob], `product.${ext}`, { type: mimeType });
-
       const fd = new FormData();
-      fd.append("product", productFile);
+      fd.append("productImageUrl", selectedProduct.imageUrl);
       fd.append("productName", selectedProduct.name);
       fd.append("category", selectedProduct.category);
-      fd.append("changes", JSON.stringify(changes));
+      fd.append("description", description);
+
+      const prevMockup = editMockupRef.current;
+      if (prevMockup) {
+        const prevImageBuffer = Buffer.from(prevMockup.base64, "base64");
+        const prevFile = new File([prevImageBuffer], "previous.png", {
+          type: prevMockup.mime,
+        });
+        fd.append("previousImage", prevFile);
+      }
+
+      if (editHistory.length > 0) {
+        fd.append("priorEdits", JSON.stringify(editHistory));
+      }
 
       const res = await fetch("/api/modify", { method: "POST", body: fd });
       const data = await res.json();
@@ -74,16 +85,34 @@ export default function Home() {
         throw new Error(data.error ?? "Unknown server error.");
       }
 
+      if (!data.imageBase64) {
+        throw new Error("No image returned from the AI service.");
+      }
+
+      const mime = data.mimeType ?? "image/png";
+      const dataUrl = `data:${mime};base64,${data.imageBase64}`;
+
+      setEditMockupBase64(data.imageBase64);
+      setEditMockupMime(mime);
+      editMockupRef.current = { base64: data.imageBase64, mime };
+      setEditHistory((prev) => [...prev, description]);
       setResultBase64(data.imageBase64);
-      setResultDataUrl(`data:${data.mimeType ?? "image/png"};base64,${data.imageBase64}`);
-      setResultMime(data.mimeType ?? "image/png");
+      setResultDataUrl(dataUrl);
+      setResultMime(mime);
       setModelUsed(data.modelUsed ?? null);
-      setStep("result");
+
+      return { dataUrl };
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      const message = e instanceof Error ? e.message : "Something went wrong.";
+      setError(message);
+      throw e instanceof Error ? e : new Error(message);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDone = () => {
+    setStep("final");
   };
 
   const handleReset = () => {
@@ -91,12 +120,16 @@ export default function Home() {
     setSelectedProduct(null);
     setResultBase64(null);
     setResultDataUrl(null);
+    setEditMockupBase64(null);
+    setEditMockupMime(null);
+    setEditHistory([]);
+    editMockupRef.current = null;
     setError(null);
     setModelUsed(null);
   };
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const stepIndex = step === "browse" ? 0 : step === "change" ? 1 : 2;
+  // ── Derived ────────────────────────────────────────────────────────────
+  const stepIndex = step === "browse" ? 0 : step === "edit" ? 1 : 2;
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-x-hidden">
@@ -127,14 +160,13 @@ export default function Home() {
               <span className="font-bold text-white text-[14px] tracking-tight block leading-none">
                 Tall Ships <span className="text-violet-400">Trading</span>
               </span>
-              <span className="text-[10px] text-white/35 tracking-wide">Sales Rep Tool</span>
             </div>
           </div>
 
-          <div className="hidden md:flex items-center gap-2 text-[11px] text-white/50 bg-white/[0.07] border border-white/[0.12] rounded-full px-3.5 py-1.5">
+          {/* <div className="hidden md:flex items-center gap-2 text-[11px] text-white/50 bg-white/[0.07] border border-white/[0.12] rounded-full px-3.5 py-1.5">
             <Sparkles size={10} className="text-violet-400" />
             AI Mockup · gemini-3.1-flash-image-preview
-          </div>
+          </div> */}
 
           <div className="flex items-center gap-1.5 text-[11px] text-white/50 flex-shrink-0">
             <span className="relative flex h-2 w-2">
@@ -153,18 +185,18 @@ export default function Home() {
         <div className="text-center mb-8 sm:mb-10">
           <div className="inline-flex items-center gap-2 text-[11px] text-violet-400/90 bg-violet-500/10 border border-violet-500/20 rounded-full px-3.5 py-1.5 mb-4 font-medium tracking-wide">
             <Package size={11} />
-            INVENTORY MODIFIER · SALES REP TOOL
+            INVENTORY MODIFIER 
           </div>
 
           <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight mb-3">
             Find a product,{" "}
             <span className="bg-gradient-to-r from-violet-400 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent">
-              suggest a change
+              request changes
             </span>
           </h1>
 
           <p className="text-white/55 text-sm max-w-lg mx-auto leading-relaxed">
-            Browse the Tall Ships Trading catalogue, select a product, and request a location name or text update. AI will generate a new mockup for download.
+            Browse the catalogue, select a product, describe your changes in natural language, and AI will iteratively regenerate the mockup. Keep editing until you're satisfied.
           </p>
         </div>
 
@@ -179,7 +211,7 @@ export default function Home() {
           <ArrowRight size={12} className="text-white/15 flex-shrink-0" />
           <StepBadge
             step={2}
-            label="Request Changes"
+            label="Edit & Iterate"
             active={stepIndex >= 1}
             done={stepIndex > 1}
           />
@@ -227,109 +259,55 @@ export default function Home() {
               <InventoryBrowser
                 selectedId={selectedProduct?.id}
                 onSelect={handleSelectProduct}
+                onConfirmSelection={handleConfirmProduct}
               />
             </div>
-
-            {/* Confirm selection CTA */}
-            {selectedProduct && (
-              <div className="glass rounded-2xl p-4 flex items-center gap-4">
-                <div className="w-12 h-12 flex-shrink-0 rounded-xl overflow-hidden bg-white/[0.06] border border-white/[0.08]">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={selectedProduct.imageUrl}
-                    alt={selectedProduct.name}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-white/90 font-semibold text-sm truncate">
-                    {selectedProduct.name}
-                  </p>
-                  <p className="text-[11px] text-white/40 mt-0.5">{selectedProduct.sku}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleConfirmProduct}
-                  className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-semibold px-4 py-2.5 rounded-xl transition-all text-sm hover:-translate-y-0.5 hover:shadow-lg hover:shadow-violet-900/40 active:scale-[0.98] flex-shrink-0"
-                >
-                  Request Changes
-                  <ArrowRight size={14} />
-                </button>
-              </div>
-            )}
           </div>
         )}
 
-        {/* ── Step 2: Change request + Result panel ───────────────────── */}
-        {(step === "change" || step === "result") && selectedProduct && (
-          <div className="grid lg:grid-cols-[1fr_1fr] gap-4 sm:gap-6 items-start">
+        {/* ── Step 2: Edit loop ─────────────────────────────────────────── */}
+        {step === "edit" && selectedProduct && (
+          <div className="glass rounded-2xl p-3 sm:p-5 lg:p-6">
+            <EditRequestChat
+              product={selectedProduct}
+              currentMockup={
+                resultDataUrl
+                  ? { dataUrl: resultDataUrl, base64: resultBase64!, mimeType: resultMime }
+                  : null
+              }
+              isLoading={isLoading}
+              onSubmitEdit={handleEditSubmit}
+              onBack={() => {
+                setStep("browse");
+                setError(null);
+              }}
+              onDone={handleDone}
+            />
+          </div>
+        )}
 
-            {/* Left: change form */}
-            <div className="glass rounded-2xl p-4 sm:p-5">
-              {step === "change" && (
-                <ChangeRequestForm
-                  product={selectedProduct}
-                  onBack={() => { setStep("browse"); setError(null); }}
-                  onGenerate={handleGenerate}
-                  isLoading={isLoading}
-                />
-              )}
-              {step === "result" && (
-                <div className="flex flex-col gap-4">
-                  {/* Product summary (read-only in result step) */}
-                  <div className="flex gap-4 items-start">
-                    <div className="w-16 h-16 flex-shrink-0 rounded-xl overflow-hidden bg-white/[0.06] border border-white/[0.08]">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={selectedProduct.imageUrl}
-                        alt={selectedProduct.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div>
-                      <p className="font-bold text-white/95 text-sm">{selectedProduct.name}</p>
-                      <p className="text-[11px] font-mono text-white/35 mt-0.5">{selectedProduct.sku}</p>
-                      <p className="text-[11px] text-emerald-400 mt-1.5">Mockup generated successfully</p>
-                    </div>
-                  </div>
-
-                  <div className="h-px bg-white/[0.08]" />
-
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="flex items-center justify-center gap-2 border border-white/[0.12] bg-white/[0.04] hover:bg-white/[0.08] text-white/70 hover:text-white font-semibold py-3 rounded-xl transition-all text-sm"
-                  >
-                    <Package size={14} />
-                    Modify another product
-                  </button>
-                </div>
-              )}
+        {/* ── Step 3: Final preview + download ────────────────────────── */}
+        {step === "final" && selectedProduct && (
+          <div className="glass rounded-2xl p-4 sm:p-6 max-w-2xl mx-auto">
+            <div className="text-center mb-5">
+              <p className="font-bold text-white/95 text-base">Final Result</p>
+              <p className="text-[12px] text-white/40 mt-1">Ready to download</p>
             </div>
 
-            {/* Right: result panel */}
-            <div className="glass rounded-2xl p-4 sm:p-5 lg:sticky lg:top-20">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="font-bold text-sm text-white/95">Modified Mockup</p>
-                  <p className="text-[11px] text-white/45 mt-0.5">AI-generated product preview</p>
-                </div>
-                {resultBase64 && modelUsed && (
-                  <div className="flex items-center gap-1.5 text-[10px] bg-violet-500/12 border border-violet-500/25 text-violet-300 rounded-full px-2.5 py-1 font-medium">
-                    <Sparkles size={9} />
-                    {modelUsed.replace("gemini-", "").replace("-preview", "")}
-                  </div>
-                )}
+            <ResultPanel
+              imageBase64={resultBase64}
+              dataUrl={resultDataUrl}
+              mimeType={resultMime}
+              isLoading={false}
+              onReset={handleReset}
+            />
+
+            {/* {modelUsed && (
+              <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] bg-violet-500/12 border border-violet-500/25 text-violet-300 rounded-full px-2.5 py-1 font-medium w-fit mx-auto">
+                <Sparkles size={9} />
+                {modelUsed.replace("gemini-", "").replace("-preview", "")}
               </div>
-              <div className="h-px bg-white/[0.10] mb-4" />
-              <ResultPanel
-                imageBase64={resultBase64}
-                dataUrl={resultDataUrl}
-                mimeType={resultMime}
-                isLoading={isLoading}
-                onReset={handleReset}
-              />
-            </div>
+            )} */}
           </div>
         )}
 
@@ -345,18 +323,18 @@ export default function Home() {
               {[
                 {
                   num: "01",
-                  title: "Browse the Catalogue",
-                  desc: "Search and filter 22+ products by category — hats, tees, mugs, keychains, magnets, and more.",
+                  title: "Browse & Select",
+                  desc: "Find a product in the catalogue. Use search and filters to narrow down by category.",
                 },
                 {
                   num: "02",
-                  title: "Request a Text Change",
-                  desc: "Choose a product and specify the new location name or text — e.g. 'Halifax' → 'Cape Breton'.",
+                  title: "Describe Changes",
+                  desc: "Tell AI what to change in natural language — 'change Halifax to Cape Breton', 'bold the text', 'adjust colors', etc.",
                 },
                 {
                   num: "03",
-                  title: "Download the Mockup",
-                  desc: "Gemini AI regenerates the product with your updated text. Download the PNG for review or presentation.",
+                  title: "Iterate & Download",
+                  desc: "AI regenerates the mockup. Keep requesting edits until perfect, then download the final PNG.",
                 },
               ].map((item) => (
                 <div key={item.num} className="glass rounded-2xl p-5 sm:p-6">
@@ -373,8 +351,7 @@ export default function Home() {
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="border-t border-white/[0.10] mt-12">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-white/35">
-          <span>Tall Ships Trading · Sales Rep Inventory Tool</span>
-          <span>Powered by Gemini AI · Next.js</span>
+          <span>Tall Ships Trading </span>
         </div>
       </footer>
     </div>

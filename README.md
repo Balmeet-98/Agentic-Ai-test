@@ -36,6 +36,19 @@ Edit `.env.local`:
 # Required
 GEMINI_API_KEY=your_key_here
 
+# Inventory catalogue (Tall Ships Trading Drupal JSON:API)
+DRUPAL_API_BASE=https://www.tallshipstrading.com
+DRUPAL_API_KEY=your_api_key
+DRUPAL_USERNAME=guest
+DRUPAL_PASSWORD=your_password
+INVENTORY_SOURCE=drupal   # drupal | mock | database (Phase 2)
+
+# Optional. Comma-separated top-level Drupal category names (case-insensitive).
+# Empty or unset = full catalog. Match by name, path alias (headwear-stock), or UUID.
+# Example: INVENTORY_CATEGORY_ALLOWLIST=Headwear Stock,Candy
+# Restart `npm run dev` after changing this value.
+INVENTORY_CATEGORY_ALLOWLIST=
+
 # Optional — connect your artwork library backend
 # ARTWORK_API_URL=https://your-client-backend.com/api
 # ARTWORK_API_KEY=your_artwork_api_key_here
@@ -67,6 +80,19 @@ GET  {ARTWORK_API_URL}/assets/{id}/download
 ```
 
 The API key is stored server-side only — never exposed to the browser.
+
+---
+
+## Inventory categories (Drupal)
+
+Product categories come from Tall Ships Trading’s `taxonomy_term/product_category` JSON:API, matching the main site’s hierarchy:
+
+1. **Top-level row** — root categories only (e.g. Candy, Cape Shore, Headwear Stock), ordered by Drupal `weight` then `display_order_override`.
+2. **Subcategory row** — direct children when a top-level category is selected; **All in {parent}** includes products in the whole subtree.
+
+Product queries use an `IN` filter on all descendant category UUIDs so parent pills return leaf-tagged products.
+
+`INVENTORY_CATEGORY_ALLOWLIST` (optional) limits which top-level branches appear in the UI and in the default product list. Leave empty to show the full catalog.
 
 ---
 

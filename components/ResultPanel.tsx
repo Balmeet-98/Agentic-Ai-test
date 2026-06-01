@@ -91,7 +91,7 @@ export default function ResultPanel({ imageBase64, dataUrl, mimeType, isLoading,
           className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-violet-900/30 hover:shadow-violet-900/50 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] text-sm"
         >
           <Download size={16} />
-          Download Mockup
+          Download
         </button>
         <button
           onClick={onReset}

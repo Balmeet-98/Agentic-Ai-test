@@ -63,28 +63,10 @@ function isThoughtSignatureError(err: unknown): boolean {
 
 // ── Mockup compositing ────────────────────────────────────────────────────────
 
-async function callMockupModel(
-  ai: GoogleGenAI,
-  model: string,
-  prompt: string,
-  params: GenerateDesignParams
-): Promise<GenerateDesignResult> {
-  const response = await ai.models.generateContent({
-    model,
-    contents: {
-      role: "user",
-      parts: [
-        { text: prompt },
-        { inlineData: { mimeType: params.productMimeType, data: params.productBase64 } },
-        { inlineData: { mimeType: params.designMimeType,  data: params.designBase64  } },
-      ],
-    },
-    config: {
-      responseModalities: ["TEXT", "IMAGE"],
-      safetySettings: SAFETY_SETTINGS,
-    },
-  });
-
+function extractImageFromResponse(
+  response: Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>,
+  model: string
+): GenerateDesignResult {
   const candidate = response.candidates?.[0];
   const parts = candidate?.content?.parts ?? [];
 
@@ -110,6 +92,56 @@ async function callMockupModel(
       ? `Gemini responded with text instead of an image: "${textResponse}"`
       : `Gemini did not return an image (finish reason: ${finishReason}). This is usually a temporary issue — please try again.`
   );
+}
+
+async function callMockupModel(
+  ai: GoogleGenAI,
+  model: string,
+  prompt: string,
+  params: GenerateDesignParams
+): Promise<GenerateDesignResult> {
+  const response = await ai.models.generateContent({
+    model,
+    contents: {
+      role: "user",
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: params.productMimeType, data: params.productBase64 } },
+        { inlineData: { mimeType: params.designMimeType, data: params.designBase64 } },
+      ],
+    },
+    config: {
+      responseModalities: ["TEXT", "IMAGE"],
+      safetySettings: SAFETY_SETTINGS,
+    },
+  });
+
+  return extractImageFromResponse(response, model);
+}
+
+async function callSingleImageModel(
+  ai: GoogleGenAI,
+  model: string,
+  prompt: string,
+  imageBase64: string,
+  imageMimeType: string
+): Promise<GenerateDesignResult> {
+  const response = await ai.models.generateContent({
+    model,
+    contents: {
+      role: "user",
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
+      ],
+    },
+    config: {
+      responseModalities: ["TEXT", "IMAGE"],
+      safetySettings: SAFETY_SETTINGS,
+    },
+  });
+
+  return extractImageFromResponse(response, model);
 }
 
 /**
@@ -182,53 +214,59 @@ INSTRUCTIONS:
 
 // ── Text-change product modifier ──────────────────────────────────────────────
 
-export interface TextChange {
-  field: string;
-  label: string;
-  from: string;
-  to: string;
-}
-
-export interface ModifyProductParams {
+export interface FreeformEditParams {
   productBase64: string;
   productMimeType: string;
   productName: string;
   category: string;
-  changes: TextChange[];
+  description: string;
+  previousImageBase64?: string;
+  previousImageMimeType?: string;
+  /** Earlier edit instructions in this session — must stay visible in the output. */
+  priorEdits?: string[];
 }
 
 /**
- * Re-renders a merchandise product image with specific text/location names changed.
- * All artwork, colours, and layout are preserved — only the specified text differs.
+ * Re-renders a merchandise product image based on natural language edit instructions.
+ * Routes through callMockupModel (same proven path as /api/generate).
  */
-export async function applyTextChangesToProduct(
-  params: ModifyProductParams
+export async function applyFreeformEdit(
+  params: FreeformEditParams
 ): Promise<GenerateDesignResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set.");
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const changeList = params.changes
-    .map((c) => `  • ${c.label}: replace "${c.from}" with "${c.to}"`)
-    .join("\n");
+  const isIterative = Boolean(params.previousImageBase64 && params.previousImageMimeType);
 
-  const prompt = `You are a professional merchandise product designer.
+  const priorEditsBlock =
+    params.priorEdits && params.priorEdits.length > 0
+      ? `\n\nEDITS ALREADY APPLIED IN THIS SESSION (must all remain visible):\n${params.priorEdits.map((e, i) => `${i + 1}. ${e}`).join("\n")}`
+      : "";
 
-TASK: Modify the text on this souvenir product image.
+  const imageContext = isIterative
+    ? `\n\nYou receive ONE image: the current mockup with edits already applied. Preserve EVERY existing change. Apply ONLY the new request below on top of what is already there. Do not revert to the catalog original.`
+    : `\n\nYou receive the catalog product photo. Apply the requested changes on the product surface.`;
+
+  const prompt = `You are a product mockup editor for merchandise photos.
 
 PRODUCT: ${params.productName} (${params.category})
 
-TEXT CHANGES TO APPLY:
-${changeList}
+NEW CHANGE REQUEST:
+${params.description}${priorEditsBlock}
 
-CRITICAL RULES:
-- Keep the product's original shape, colour, material, and overall design 100% intact.
-- Keep all artwork, logos, graphic elements, and layout completely unchanged.
-- ONLY replace the specified text content with the new values provided.
-- Match the original text's font style, size, weight, colour, and positioning as closely as possible.
-- The end result must look like the same product with only the place name / text updated.
-- Output only the final product image — no watermarks, labels, or extra elements.`;
+YOUR RULES:
+1. Keep the same product shape, size, camera angle, and overall style.
+2. You MAY change on-product text, logos, embroidery, prints, and visible fabric/panel colors when asked (e.g. "make the cap white").
+3. Apply the NEW request while keeping all prior edits from this session.
+4. Match original font style and placement where text is replaced (e.g. replace "Red Maple" with "Honey" in the same position).
+5. Output only the edited product photo — no captions, borders, or watermarks.
+
+EXAMPLES:
+- "Change Red Maple to Honey" → Replace that text on the product only
+- "Make the cap white" → Change cap fabric color to white, keep other edits
+- "Make text bolder" → Thicken visible text only${imageContext}`;
 
   let lastError: unknown;
 
@@ -237,71 +275,42 @@ CRITICAL RULES:
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType: params.productMimeType,
-                  data: params.productBase64,
-                },
-              },
-            ],
-          },
-          config: {
-            responseModalities: ["TEXT", "IMAGE"],
-            safetySettings: SAFETY_SETTINGS,
-          },
-        });
-
-        const candidate = response.candidates?.[0];
-        const parts = candidate?.content?.parts ?? [];
-
-        console.log(
-          `[gemini modify] ${model} — finishReason: ${candidate?.finishReason ?? "n/a"}, parts: ${parts.length}`
-        );
-
-        for (const part of parts) {
-          if (part.inlineData?.data) {
-            console.log(`[gemini modify] ✓ ${model} succeeded (attempt ${attempt + 1})`);
-            return {
-              imageBase64: part.inlineData.data,
-              mimeType: part.inlineData.mimeType ?? "image/png",
-              modelUsed: model,
-            };
-          }
-        }
-
-        const textResponse = parts.map((p) => p.text).filter(Boolean).join(" ").trim();
-        const finishReason = candidate?.finishReason ?? "unknown";
-
-        throw new Error(
-          textResponse
-            ? `Gemini responded with text instead of an image: "${textResponse}"`
-            : `Gemini did not return an image (finish reason: ${finishReason}). Please try again.`
-        );
+        const result = isIterative
+          ? await callSingleImageModel(
+              ai,
+              model,
+              prompt,
+              params.previousImageBase64!,
+              params.previousImageMimeType!
+            )
+          : await callSingleImageModel(
+              ai,
+              model,
+              prompt,
+              params.productBase64,
+              params.productMimeType
+            );
+        console.log(`[gemini freeform] ✓ ${model} succeeded (attempt ${attempt + 1})`);
+        return result;
       } catch (err) {
         lastError = err;
         if (isOverloaded(err)) {
           const wait = (attempt + 1) * 3000;
           console.warn(
-            `[gemini modify] ${model} overloaded (attempt ${attempt + 1}), retrying in ${wait}ms…`
+            `[gemini freeform] ${model} overloaded (attempt ${attempt + 1}), retrying in ${wait}ms…`
           );
           await sleep(wait);
           continue;
         }
         console.warn(
-          `[gemini modify] ${model} failed: ${err instanceof Error ? err.message : err}`
+          `[gemini freeform] ${model} failed: ${err instanceof Error ? err.message : err}`
         );
         break;
       }
     }
   }
 
-  throw lastError ?? new Error("Gemini text modification failed.");
+  throw lastError ?? new Error("Gemini modification failed.");
 }
 
 // ── AI Design Chatbot ─────────────────────────────────────────────────────────

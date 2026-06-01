@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applyTextChangesToProduct } from "@/lib/gemini";
-import type { TextChange } from "@/lib/gemini";
+import { applyFreeformEdit } from "@/lib/gemini";
+import { loadProductImage } from "@/lib/product-image";
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -10,59 +10,94 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
 
     const productFile = formData.get("product") as File | null;
+    const productImageUrl = (formData.get("productImageUrl") as string | null)?.trim() ?? "";
     const productName = (formData.get("productName") as string | null) ?? "souvenir product";
     const category = (formData.get("category") as string | null) ?? "merchandise";
-    const changesJson = (formData.get("changes") as string | null) ?? "[]";
+    const description = (formData.get("description") as string | null) ?? "";
+    const previousImageFile = formData.get("previousImage") as File | null;
+    const priorEditsRaw = (formData.get("priorEdits") as string | null)?.trim() ?? "";
+    let priorEdits: string[] = [];
+    if (priorEditsRaw) {
+      try {
+        const parsed = JSON.parse(priorEditsRaw) as unknown;
+        if (Array.isArray(parsed)) {
+          priorEdits = parsed.filter((e): e is string => typeof e === "string" && e.trim().length > 0);
+        }
+      } catch {
+        priorEdits = [];
+      }
+    }
 
-    // ── Validate product file ────────────────────────────────────────────────
-    if (!productFile || productFile.size === 0) {
+    // ── Load product image (file upload or server-side URL fetch) ───────────
+    let productBase64: string;
+    let productMimeType: string;
+
+    if (productImageUrl) {
+      try {
+        const loaded = await loadProductImage(productImageUrl);
+        productBase64 = loaded.base64;
+        productMimeType = loaded.mimeType;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to load product image.";
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
+    } else if (productFile && productFile.size > 0) {
+      if (!ALLOWED_MIME_TYPES.includes(productFile.type)) {
+        return NextResponse.json(
+          { error: `Unsupported image format: ${productFile.type}. Use PNG, JPG, or WEBP.` },
+          { status: 400 }
+        );
+      }
+      if (productFile.size > MAX_FILE_BYTES) {
+        return NextResponse.json(
+          { error: "Product image exceeds the 10 MB limit." },
+          { status: 400 }
+        );
+      }
+      const productBuffer = Buffer.from(await productFile.arrayBuffer());
+      productBase64 = productBuffer.toString("base64");
+      productMimeType = productFile.type;
+    } else {
       return NextResponse.json(
         { error: "No product image received." },
         { status: 400 }
       );
     }
-    if (!ALLOWED_MIME_TYPES.includes(productFile.type)) {
+
+    // ── Validate description ─────────────────────────────────────────────────
+    if (!description.trim()) {
       return NextResponse.json(
-        { error: `Unsupported image format: ${productFile.type}. Use PNG, JPG, or WEBP.` },
-        { status: 400 }
-      );
-    }
-    if (productFile.size > MAX_FILE_BYTES) {
-      return NextResponse.json(
-        { error: "Product image exceeds the 10 MB limit." },
+        { error: "Please describe what you'd like to change." },
         { status: 400 }
       );
     }
 
-    // ── Parse changes ────────────────────────────────────────────────────────
-    let changes: TextChange[];
-    try {
-      changes = JSON.parse(changesJson);
-      if (!Array.isArray(changes) || changes.length === 0) {
+    // ── Convert previous image if provided ──────────────────────────────────
+    let previousImageBase64: string | undefined;
+    let previousImageMimeType: string | undefined;
+
+    if (previousImageFile && previousImageFile.size > 0) {
+      if (!ALLOWED_MIME_TYPES.includes(previousImageFile.type)) {
         return NextResponse.json(
-          { error: "At least one text change is required." },
+          { error: "Invalid previous image format." },
           { status: 400 }
         );
       }
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid changes payload." },
-        { status: 400 }
-      );
+      const prevBuffer = Buffer.from(await previousImageFile.arrayBuffer());
+      previousImageBase64 = prevBuffer.toString("base64");
+      previousImageMimeType = previousImageFile.type;
     }
 
-    // ── Convert product to base64 ────────────────────────────────────────────
-    const productBuffer = Buffer.from(await productFile.arrayBuffer());
-    const productBase64 = productBuffer.toString("base64");
-    const productMimeType = productFile.type;
-
     // ── Generate modified product via Gemini ─────────────────────────────────
-    const output = await applyTextChangesToProduct({
+    const output = await applyFreeformEdit({
       productBase64,
       productMimeType,
       productName,
       category,
-      changes,
+      description,
+      previousImageBase64,
+      previousImageMimeType,
+      priorEdits,
     });
 
     return NextResponse.json({
