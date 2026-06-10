@@ -7,18 +7,41 @@ import {
   Sparkles,
   ArrowRight,
   Anchor,
+  FileText,
 } from "lucide-react";
 import InventoryBrowser from "@/components/InventoryBrowser";
+import PdfImageImporter from "@/components/PdfImageImporter";
 import EditRequestChat from "@/components/EditRequestChat";
 import ResultPanel from "@/components/ResultPanel";
 import StepBadge from "@/components/StepBadge";
 import type { InventoryItem } from "@/lib/inventory-types";
+import {
+  revokeExtractedImages,
+  type ExtractedPdfImage,
+} from "@/lib/pdf-extract-images";
 
 type AppStep = "browse" | "edit" | "final";
+type ImageSource = "catalogue" | "pdf";
+type BrowseMode = "catalogue" | "pdf";
+
+const PDF_PRODUCT: InventoryItem = {
+  id: "pdf-import",
+  sku: "PDF",
+  name: "Imported PDF image",
+  category: "Imported",
+  location: "",
+  color: "",
+  imageUrl: "",
+  description: "",
+};
 
 export default function Home() {
   const [step, setStep] = useState<AppStep>("browse");
+  const [browseMode, setBrowseMode] = useState<BrowseMode>("catalogue");
+  const [imageSource, setImageSource] = useState<ImageSource>("catalogue");
   const [selectedProduct, setSelectedProduct] = useState<InventoryItem | null>(null);
+  const [selectedPdfImage, setSelectedPdfImage] = useState<ExtractedPdfImage | null>(null);
+  const selectedPdfImageRef = useRef<ExtractedPdfImage | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,22 +68,63 @@ export default function Home() {
     setModelUsed(null);
   };
 
+  const clearPdfSelection = () => {
+    if (selectedPdfImage) {
+      revokeExtractedImages([selectedPdfImage]);
+    }
+    setSelectedPdfImage(null);
+    selectedPdfImageRef.current = null;
+  };
+
+  const handleBrowseModeChange = (mode: BrowseMode) => {
+    setBrowseMode(mode);
+    if (mode === "catalogue") {
+      clearPdfSelection();
+    } else {
+      setSelectedProduct(null);
+    }
+  };
+
   const handleSelectProduct = (item: InventoryItem) => {
     if (selectedProduct?.id !== item.id) {
       resetEditSession();
     }
+    clearPdfSelection();
+    setImageSource("catalogue");
+    setBrowseMode("catalogue");
     setSelectedProduct(item);
+  };
+
+  const handleSelectPdfImage = (image: ExtractedPdfImage | null) => {
+    if (image?.id !== selectedPdfImage?.id) {
+      resetEditSession();
+    }
+    setSelectedProduct(null);
+    setImageSource("pdf");
+    setBrowseMode("pdf");
+    setSelectedPdfImage(image);
+    selectedPdfImageRef.current = image;
   };
 
   const handleConfirmProduct = () => {
     if (!selectedProduct) return;
     resetEditSession();
+    setImageSource("catalogue");
+    setStep("edit");
+    setError(null);
+  };
+
+  const handleConfirmPdfImage = () => {
+    if (!selectedPdfImage) return;
+    resetEditSession();
+    setImageSource("pdf");
     setStep("edit");
     setError(null);
   };
 
   const handleEditSubmit = async (description: string): Promise<{ dataUrl: string }> => {
-    if (!selectedProduct || isLoading) {
+    const editProduct = activeProduct;
+    if (!editProduct || isLoading) {
       throw new Error("Cannot submit while loading.");
     }
 
@@ -69,10 +133,19 @@ export default function Home() {
 
     try {
       const fd = new FormData();
-      fd.append("productImageUrl", selectedProduct.imageUrl);
-      fd.append("productName", selectedProduct.name);
-      fd.append("category", selectedProduct.category);
+      fd.append("productName", editProduct.name);
+      fd.append("category", editProduct.category);
       fd.append("description", description);
+
+      const pdfImage = selectedPdfImageRef.current;
+
+      if (imageSource === "pdf" && pdfImage) {
+        fd.append("product", pdfImage.file, pdfImage.file.name);
+      } else if (imageSource === "catalogue" && selectedProduct) {
+        fd.append("productImageUrl", selectedProduct.imageUrl);
+      } else {
+        throw new Error("No product image available for editing.");
+      }
 
       const prevMockup = editMockupRef.current;
       if (prevMockup) {
@@ -126,13 +199,23 @@ export default function Home() {
 
   const handleReset = () => {
     setStep("browse");
+    setBrowseMode("catalogue");
+    setImageSource("catalogue");
     setSelectedProduct(null);
+    clearPdfSelection();
     resetEditSession();
     setError(null);
   };
 
   // ── Derived ────────────────────────────────────────────────────────────
   const stepIndex = step === "browse" ? 0 : step === "edit" ? 1 : 2;
+
+  const activeProduct: InventoryItem | null =
+    imageSource === "catalogue" && selectedProduct
+      ? selectedProduct
+      : imageSource === "pdf" && selectedPdfImage
+        ? { ...PDF_PRODUCT, imageUrl: selectedPdfImage.previewUrl }
+        : null;
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-x-hidden">
@@ -199,7 +282,7 @@ export default function Home() {
           </h1>
 
           <p className="text-white/55 text-sm max-w-lg mx-auto leading-relaxed">
-            Browse the catalogue, select a product, describe your changes in natural language, and AI will iteratively regenerate the mockup. Keep editing until you're satisfied.
+            Browse the catalogue or import individual images from a PDF, describe your changes in natural language, and AI will iteratively regenerate the mockup.
           </p>
         </div>
 
@@ -244,36 +327,102 @@ export default function Home() {
 
         {/* ── Step 1: Browse inventory ─────────────────────────────────── */}
         {step === "browse" && (
-          <div className="flex flex-col gap-6">
-            <div className="glass rounded-2xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-5">
-                <div>
-                  <p className="font-bold text-white/95 text-base">Product Catalogue</p>
-                  <p className="text-[12px] text-white/40 mt-0.5">
-                    Select a product to modify
-                  </p>
-                </div>
+          <div className="flex flex-col gap-5">
+            <div
+              role="tablist"
+              aria-label="Image source"
+              className="flex p-1 rounded-xl bg-white/[0.04] border border-white/[0.08] max-w-md mx-auto w-full"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={browseMode === "catalogue"}
+                onClick={() => handleBrowseModeChange("catalogue")}
+                className={`flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
+                  browseMode === "catalogue"
+                    ? "bg-gradient-to-r from-violet-600/90 to-fuchsia-600/90 text-white shadow-lg shadow-violet-500/20"
+                    : "text-white/50 hover:text-white/75 hover:bg-white/[0.04]"
+                }`}
+              >
+                <Package size={15} />
+                Catalogue
                 {selectedProduct && (
-                  <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-3 py-1 font-medium">
-                    1 selected
-                  </div>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
                 )}
-              </div>
-              <InventoryBrowser
-                selectedId={selectedProduct?.id}
-                onSelect={handleSelectProduct}
-                onConfirmSelection={handleConfirmProduct}
-              />
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={browseMode === "pdf"}
+                onClick={() => handleBrowseModeChange("pdf")}
+                className={`flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
+                  browseMode === "pdf"
+                    ? "bg-gradient-to-r from-violet-600/90 to-fuchsia-600/90 text-white shadow-lg shadow-violet-500/20"
+                    : "text-white/50 hover:text-white/75 hover:bg-white/[0.04]"
+                }`}
+              >
+                <FileText size={15} />
+                PDF Import
+                {selectedPdfImage && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                )}
+              </button>
+            </div>
+
+            <div className="glass rounded-2xl p-4 sm:p-6">
+              {browseMode === "catalogue" ? (
+                <>
+                  <div className="flex items-center justify-between mb-5">
+                    <div>
+                      <p className="font-bold text-white/95 text-base">Product Catalogue</p>
+                      <p className="text-[12px] text-white/40 mt-0.5">
+                        Select a product to modify
+                      </p>
+                    </div>
+                    {selectedProduct && (
+                      <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-3 py-1 font-medium">
+                        1 product selected
+                      </div>
+                    )}
+                  </div>
+                  <InventoryBrowser
+                    selectedId={selectedProduct?.id}
+                    onSelect={handleSelectProduct}
+                    onConfirmSelection={handleConfirmProduct}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-5">
+                    <div>
+                      <p className="font-bold text-white/95 text-base">Import from PDF</p>
+                      <p className="text-[12px] text-white/40 mt-0.5">
+                        Upload a PDF, pick an individual image, then edit it the same way
+                      </p>
+                    </div>
+                    {selectedPdfImage && (
+                      <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-3 py-1 font-medium">
+                        1 PDF image selected
+                      </div>
+                    )}
+                  </div>
+                  <PdfImageImporter
+                    selectedId={selectedPdfImage?.id ?? null}
+                    onSelect={handleSelectPdfImage}
+                    onConfirmSelection={handleConfirmPdfImage}
+                  />
+                </>
+              )}
             </div>
           </div>
         )}
 
         {/* ── Step 2: Edit loop ─────────────────────────────────────────── */}
-        {step === "edit" && selectedProduct && (
+        {step === "edit" && activeProduct && (
           <div className="glass rounded-2xl p-3 sm:p-5 lg:p-6">
             <EditRequestChat
-              key={selectedProduct.id}
-              product={selectedProduct}
+              key={activeProduct.id + (selectedPdfImage?.id ?? selectedProduct?.id ?? "")}
+              product={activeProduct}
               currentMockup={
                 resultDataUrl
                   ? { dataUrl: resultDataUrl, base64: resultBase64!, mimeType: resultMime }
@@ -283,6 +432,7 @@ export default function Home() {
               onSubmitEdit={handleEditSubmit}
               onBack={() => {
                 setStep("browse");
+                setBrowseMode(imageSource === "pdf" ? "pdf" : "catalogue");
                 setError(null);
                 resetEditSession();
               }}
@@ -292,7 +442,7 @@ export default function Home() {
         )}
 
         {/* ── Step 3: Final preview + download ────────────────────────── */}
-        {step === "final" && selectedProduct && (
+        {step === "final" && activeProduct && (
           <div className="glass rounded-2xl p-4 sm:p-6 max-w-2xl mx-auto">
             <div className="text-center mb-5">
               <p className="font-bold text-white/95 text-base">Final Result</p>
@@ -328,8 +478,8 @@ export default function Home() {
               {[
                 {
                   num: "01",
-                  title: "Browse & Select",
-                  desc: "Find a product in the catalogue. Use search and filters to narrow down by category.",
+                  title: "Browse or Import",
+                  desc: "Pick a product from the catalogue, or upload a PDF and select an individual design image to start from.",
                 },
                 {
                   num: "02",
