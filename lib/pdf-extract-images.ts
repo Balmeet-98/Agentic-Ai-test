@@ -1,5 +1,7 @@
 "use client";
 
+import { logUiError, logUiEvent, logUiWarning } from "@/lib/client-log";
+
 export interface ExtractedPdfImage {
   id: string;
   file: File;
@@ -65,6 +67,7 @@ async function loadPdfJs() {
     // Bundled import.meta.url worker paths break in Next.js and can hang Safari.
     pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
     workerConfigured = true;
+    logUiEvent("pdf.worker_configured", { workerSrc: "/pdf.worker.min.mjs" });
   }
 
   return pdfjs;
@@ -431,11 +434,50 @@ export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtraction
     throw new Error("PDF extraction is only available in the browser.");
   }
 
-  return withTimeout(
-    extractImagesFromPdfInternal(pdfFile),
-    EXTRACTION_TIMEOUT_MS,
-    "PDF processing timed out. Try a smaller file or a different browser."
-  );
+  const startedAt = performance.now();
+  logUiEvent("pdf.extract_start", {
+    fileName: pdfFile.name,
+    fileSize: pdfFile.size,
+    fileType: pdfFile.type || "unknown",
+  });
+
+  try {
+    const result = await withTimeout(
+      extractImagesFromPdfInternal(pdfFile),
+      EXTRACTION_TIMEOUT_MS,
+      "PDF processing timed out. Try a smaller file or a different browser."
+    );
+
+    logUiEvent("pdf.extract_success", {
+      fileName: pdfFile.name,
+      imageCount: result.images.length,
+      truncated: result.truncated,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+
+    return result;
+  } catch (error) {
+    const durationMs = Math.round(performance.now() - startedAt);
+    const isTimeout =
+      error instanceof Error &&
+      error.message.includes("PDF processing timed out");
+
+    if (isTimeout) {
+      logUiWarning("pdf.extract_timeout", error.message, {
+        fileName: pdfFile.name,
+        fileSize: pdfFile.size,
+        durationMs,
+      });
+    } else {
+      logUiError("pdf.extract_error", error, {
+        fileName: pdfFile.name,
+        fileSize: pdfFile.size,
+        durationMs,
+      });
+    }
+
+    throw error;
+  }
 }
 
 export function revokeExtractedImages(images: ExtractedPdfImage[]) {

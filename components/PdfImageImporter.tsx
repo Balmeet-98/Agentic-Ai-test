@@ -15,6 +15,7 @@ import {
   revokeExtractedImages,
   type ExtractedPdfImage,
 } from "@/lib/pdf-extract-images";
+import { logUiError } from "@/lib/client-log";
 
 interface Props {
   selectedId: string | null;
@@ -68,6 +69,10 @@ export default function PdfImageImporter({
           e instanceof Error ? e.message : "Failed to extract images from PDF.";
         setError(message);
         setPdfName(null);
+        logUiError("pdf.import_failed", e, {
+          fileName: file.name,
+          fileSize: file.size,
+        });
       } finally {
         setExtracting(false);
       }
