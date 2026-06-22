@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MapPin, Tag, Check, ChevronRight, Sparkles } from "lucide-react";
+import { Check, ChevronRight, Sparkles } from "lucide-react";
 import type { InventoryItem } from "@/lib/inventory-types";
 
 function categoryBadgeClass(category: string): string {
@@ -35,13 +35,17 @@ export default function ProductCard({ item, selected, onSelect, onConfirm }: Pro
 
   useEffect(() => {
     if (!selected) return;
-    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    cardRef.current?.scrollIntoView({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "nearest",
+    });
   }, [selected]);
 
-  const cardClass = `group relative w-full text-left rounded-2xl border transition-all duration-200 ${
+  const cardClass = `product-card group relative w-full h-full text-left rounded-2xl border transition-all duration-200 ${
     selected
-      ? "z-20 overflow-visible border-violet-500/60 bg-violet-500/8 ring-1 ring-violet-500/30 shadow-lg shadow-violet-900/20"
-      : "z-0 overflow-hidden border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
+      ? "z-10 border-violet-500/60 bg-violet-500/8 ring-1 ring-violet-500/30 shadow-lg shadow-violet-900/20"
+      : "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
   }`;
 
   return (
@@ -51,7 +55,7 @@ export default function ProductCard({ item, selected, onSelect, onConfirm }: Pro
         onClick={() => onSelect(item)}
         aria-label={`Select ${item.name}`}
         aria-pressed={selected}
-        className="w-full text-left"
+        className="flex flex-col flex-1 min-h-0 w-full text-left"
       >
         {selected && (
           <div className="absolute top-2.5 right-2.5 z-10 w-6 h-6 rounded-full bg-violet-500 flex items-center justify-center shadow-lg pointer-events-none">
@@ -59,7 +63,7 @@ export default function ProductCard({ item, selected, onSelect, onConfirm }: Pro
           </div>
         )}
 
-        <div className="relative w-full aspect-square overflow-hidden bg-white/[0.04]">
+        <div className="relative w-full aspect-square overflow-hidden bg-white/[0.04] flex-shrink-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={item.imageUrl}
@@ -79,52 +83,22 @@ export default function ProductCard({ item, selected, onSelect, onConfirm }: Pro
           </div>
         </div>
 
-        <div className={`p-3 ${selected ? "pb-2" : ""}`}>
-          <p className="font-semibold text-white/90 text-[13px] leading-snug line-clamp-2 mb-2">
+        <div className="flex flex-col flex-1 p-3 pb-2 min-h-0">
+          <p className="product-card__title font-semibold text-white/90 text-[13px] leading-snug mb-2">
             {item.name}
           </p>
 
-          {/* <div className="flex items-center gap-2 flex-wrap mb-2.5">
-            {item.location !== "—" && (
-              <>
-                <span className="flex items-center gap-1 text-[10px] text-white/45">
-                  <MapPin size={9} className="flex-shrink-0" />
-                  {item.location}
-                </span>
-                <span className="w-[3px] h-[3px] rounded-full bg-white/20 flex-shrink-0" />
-              </>
-            )}
-            {item.color !== "—" && (
-              <span className="flex items-center gap-1 text-[10px] text-white/35">
-                <Tag size={9} className="flex-shrink-0" />
-                {item.color}
-              </span>
-            )}
-          </div> */}
-
-          <p className={`text-[10px] text-white/35 font-mono ${selected ? "" : "mb-3"}`}>
-            {item.sku}
-          </p>
-
-          {!selected && (
-            <div className="flex items-center justify-between text-[11px] font-semibold text-white/40 group-hover:text-violet-300 transition-colors">
-              <span>Select product</span>
-              <ChevronRight
-                size={13}
-                className="transition-transform group-hover:translate-x-0.5"
-              />
-            </div>
-          )}
+          <p className="text-[10px] text-white/35 font-mono truncate">{item.sku}</p>
         </div>
       </button>
 
-      {selected && onConfirm && (
-        <div className="px-3 pb-3">
+      <div className="product-card__footer px-3 pb-3 flex-shrink-0">
+        {selected && onConfirm ? (
           <button
             type="button"
             onClick={onConfirm}
             aria-label={`Describe changes for ${item.name}`}
-            className="product-card-cta w-full flex items-center justify-between gap-2 rounded-lg border border-violet-400/45 bg-gradient-to-r from-violet-500/25 via-fuchsia-500/15 to-violet-500/20 px-2.5 py-1.5 hover:from-violet-500/35 hover:to-fuchsia-500/25 transition-colors"
+            className="product-card-cta w-full h-full flex items-center justify-between gap-2 rounded-lg border border-violet-400/45 bg-gradient-to-r from-violet-500/25 via-fuchsia-500/15 to-violet-500/20 px-2.5 py-1.5 hover:from-violet-500/35 hover:to-fuchsia-500/25 transition-colors"
           >
             <span className="flex items-center gap-1.5 min-w-0">
               <Sparkles size={11} className="text-fuchsia-300/90 flex-shrink-0" />
@@ -137,8 +111,20 @@ export default function ProductCard({ item, selected, onSelect, onConfirm }: Pro
               className="product-card-cta-icon text-violet-200 flex-shrink-0"
             />
           </button>
-        </div>
-      )}
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSelect(item)}
+            className="w-full h-full flex items-center justify-between text-[11px] font-semibold text-white/40 group-hover:text-violet-300 transition-colors"
+          >
+            <span>Select product</span>
+            <ChevronRight
+              size={13}
+              className="transition-transform group-hover:translate-x-0.5"
+            />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

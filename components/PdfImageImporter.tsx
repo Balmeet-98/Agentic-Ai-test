@@ -180,16 +180,16 @@ export default function PdfImageImporter({
             </p>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-start">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch">
             {images.map((img) => {
               const isSelected = img.id === selectedId;
               return (
                 <div
                   key={img.id}
-                  className={`group relative rounded-xl border transition-all text-left ${
+                  className={`product-card group relative h-full rounded-xl border transition-all text-left ${
                     isSelected
-                      ? "z-20 overflow-visible border-violet-500/60 ring-1 ring-violet-500/30 bg-violet-500/8 shadow-lg shadow-violet-900/20"
-                      : "z-0 overflow-hidden border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
+                      ? "z-10 border-violet-500/60 ring-1 ring-violet-500/30 bg-violet-500/8 shadow-lg shadow-violet-900/20"
+                      : "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
                   }`}
                 >
                   <button
@@ -197,14 +197,14 @@ export default function PdfImageImporter({
                     onClick={() => onSelect(isSelected ? null : img)}
                     aria-label={`Select PDF image from page ${img.pageNumber}`}
                     aria-pressed={isSelected}
-                    className="w-full text-left"
+                    className="flex flex-col flex-1 min-h-0 w-full text-left"
                   >
                     {isSelected && (
                       <div className="absolute top-2 right-2 z-10 w-5 h-5 rounded-full bg-violet-500 flex items-center justify-center shadow-lg pointer-events-none">
                         <Check size={10} className="text-white" />
                       </div>
                     )}
-                    <div className="aspect-square bg-white/[0.04] overflow-hidden">
+                    <div className="aspect-square bg-white/[0.04] overflow-hidden flex-shrink-0">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={img.previewUrl}
@@ -212,29 +212,20 @@ export default function PdfImageImporter({
                         className="w-full h-full object-contain p-1"
                       />
                     </div>
-                    <div className={`px-2 py-1.5 ${isSelected ? "pb-1" : ""}`}>
-                      <p className="text-[10px] text-white/40 font-mono">
+                    <div className="flex flex-col flex-1 px-2 py-1.5 pb-2 min-h-0">
+                      <p className="text-[10px] text-white/40 font-mono truncate">
                         Page {img.pageNumber} · #{img.regionIndex}
                       </p>
-                      {!isSelected && (
-                        <div className="flex items-center justify-between text-[11px] font-semibold text-white/40 group-hover:text-violet-300 transition-colors mt-1">
-                          <span>Select image</span>
-                          <ChevronRight
-                            size={13}
-                            className="transition-transform group-hover:translate-x-0.5"
-                          />
-                        </div>
-                      )}
                     </div>
                   </button>
 
-                  {isSelected && onConfirmSelection && (
-                    <div className="px-2 pb-2">
+                  <div className="product-card__footer px-2 pb-2 flex-shrink-0">
+                    {isSelected && onConfirmSelection ? (
                       <button
                         type="button"
                         onClick={onConfirmSelection}
                         aria-label={`Use PDF image from page ${img.pageNumber}`}
-                        className="w-full flex items-center justify-between gap-2 rounded-lg border border-violet-400/45 bg-gradient-to-r from-violet-500/25 via-fuchsia-500/15 to-violet-500/20 px-2.5 py-1.5 hover:from-violet-500/35 hover:to-fuchsia-500/25 transition-colors"
+                        className="w-full h-full flex items-center justify-between gap-2 rounded-lg border border-violet-400/45 bg-gradient-to-r from-violet-500/25 via-fuchsia-500/15 to-violet-500/20 px-2.5 py-1.5 hover:from-violet-500/35 hover:to-fuchsia-500/25 transition-colors"
                       >
                         <span className="flex items-center gap-1.5 min-w-0">
                           <Sparkles size={11} className="text-fuchsia-300/90 flex-shrink-0" />
@@ -244,8 +235,20 @@ export default function PdfImageImporter({
                         </span>
                         <ChevronRight size={13} className="text-violet-200 flex-shrink-0" />
                       </button>
-                    </div>
-                  )}
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onSelect(img)}
+                        className="w-full h-full flex items-center justify-between text-[11px] font-semibold text-white/40 group-hover:text-violet-300 transition-colors"
+                      >
+                        <span>Select image</span>
+                        <ChevronRight
+                          size={13}
+                          className="transition-transform group-hover:translate-x-0.5"
+                        />
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}

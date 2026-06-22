@@ -324,7 +324,7 @@ export default function InventoryBrowser({
       {/* Product grid */}
       {showProductSkeletons ? (
         <div
-          className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3"
+          className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-stretch"
           role="status"
           aria-live="polite"
           aria-label="Loading products"
@@ -333,7 +333,7 @@ export default function InventoryBrowser({
         </div>
       ) : items.length > 0 ? (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-start">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-stretch">
             {items.map((item) => (
               <ProductCard
                 key={item.id}

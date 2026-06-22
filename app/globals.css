@@ -102,6 +102,26 @@ body {
   animation: cta-nudge 1.4s ease-in-out infinite;
 }
 
+/* ── Product cards (equal-height grid) ─────────── */
+.product-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.product-card__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-height: 2.75rem;
+}
+
+.product-card__footer {
+  min-height: 2.375rem;
+}
+
 /* ── Glass card ────────────────────────────────── */
 .glass {
   background: rgba(255,255,255,0.055);
