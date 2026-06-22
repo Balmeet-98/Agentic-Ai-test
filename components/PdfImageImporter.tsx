@@ -51,11 +51,6 @@ export default function PdfImageImporter({
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedId || extracting || pdfName) return;
-    onSelect(null);
-  }, [selectedId, extracting, pdfName, onSelect]);
-
   const processPdf = useCallback(
     async (file: File) => {
       clearExtracted();
@@ -185,16 +180,16 @@ export default function PdfImageImporter({
             </p>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-start">
             {images.map((img) => {
               const isSelected = img.id === selectedId;
               return (
                 <div
                   key={img.id}
-                  className={`group relative rounded-xl overflow-hidden border transition-all text-left ${
+                  className={`group relative rounded-xl border transition-all text-left ${
                     isSelected
-                      ? "border-violet-500/60 ring-1 ring-violet-500/30 bg-violet-500/8"
-                      : "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
+                      ? "z-20 overflow-visible border-violet-500/60 ring-1 ring-violet-500/30 bg-violet-500/8 shadow-lg shadow-violet-900/20"
+                      : "z-0 overflow-hidden border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
                   }`}
                 >
                   <button

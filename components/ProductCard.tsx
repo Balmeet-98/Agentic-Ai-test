@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { MapPin, Tag, Check, ChevronRight, Sparkles } from "lucide-react";
 import type { InventoryItem } from "@/lib/inventory-types";
 
@@ -30,15 +31,21 @@ interface Props {
 
 export default function ProductCard({ item, selected, onSelect, onConfirm }: Props) {
   const badgeClass = categoryBadgeClass(item.category);
+  const cardRef = useRef<HTMLDivElement>(null);
 
-  const cardClass = `group relative w-full text-left rounded-2xl overflow-hidden border transition-all duration-200 ${
+  useEffect(() => {
+    if (!selected) return;
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [selected]);
+
+  const cardClass = `group relative w-full text-left rounded-2xl border transition-all duration-200 ${
     selected
-      ? "border-violet-500/60 bg-violet-500/8 ring-1 ring-violet-500/30"
-      : "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
+      ? "z-20 overflow-visible border-violet-500/60 bg-violet-500/8 ring-1 ring-violet-500/30 shadow-lg shadow-violet-900/20"
+      : "z-0 overflow-hidden border-white/[0.08] bg-white/[0.03] hover:border-white/[0.15] hover:bg-white/[0.06]"
   }`;
 
   return (
-    <div className={cardClass}>
+    <div ref={cardRef} className={cardClass}>
       <button
         type="button"
         onClick={() => onSelect(item)}

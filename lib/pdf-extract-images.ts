@@ -26,6 +26,30 @@ const CROP_PADDING = 10;
 
 let workerConfigured = false;
 
+const EXTRACTION_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 interface RegionRect {
   x: number;
   y: number;
@@ -38,10 +62,8 @@ async function loadPdfJs() {
   const pdfjs = await import("pdfjs-dist");
 
   if (!workerConfigured && typeof window !== "undefined") {
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url
-    ).toString();
+    // Bundled import.meta.url worker paths break in Next.js and can hang Safari.
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
     workerConfigured = true;
   }
 
@@ -316,11 +338,7 @@ export async function extractEmbeddedImagesFromPdf(
   return result.images;
 }
 
-export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtractionResult> {
-  if (typeof window === "undefined") {
-    throw new Error("PDF extraction is only available in the browser.");
-  }
-
+async function extractImagesFromPdfInternal(pdfFile: File): Promise<PdfExtractionResult> {
   if (
     pdfFile.type !== "application/pdf" &&
     !pdfFile.name.toLowerCase().endsWith(".pdf")
@@ -335,8 +353,8 @@ export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtraction
 
   let pdf;
   try {
-    const arrayBuffer = await pdfFile.arrayBuffer();
-    pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    const data = new Uint8Array(await pdfFile.arrayBuffer());
+    pdf = await pdfjs.getDocument({ data }).promise;
   } catch {
     throw new Error("Could not read this PDF. The file may be corrupt or password-protected.");
   }
@@ -351,6 +369,8 @@ export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtraction
       truncated = true;
       break;
     }
+
+    await yieldToMain();
 
     const page = await pdf.getPage(pageNum);
     const baseViewport = page.getViewport({ scale: 1 });
@@ -404,6 +424,18 @@ export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtraction
   }
 
   return { images: results, truncated };
+}
+
+export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtractionResult> {
+  if (typeof window === "undefined") {
+    throw new Error("PDF extraction is only available in the browser.");
+  }
+
+  return withTimeout(
+    extractImagesFromPdfInternal(pdfFile),
+    EXTRACTION_TIMEOUT_MS,
+    "PDF processing timed out. Try a smaller file or a different browser."
+  );
 }
 
 export function revokeExtractedImages(images: ExtractedPdfImage[]) {

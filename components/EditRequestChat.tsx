@@ -124,59 +124,9 @@ export default function EditRequestChat({
       )}
 
       <div className="flex flex-col lg:grid lg:grid-cols-2 lg:gap-5 lg:items-stretch gap-4">
-        {/* Current design preview */}
+        {/* Describe changes — first on mobile so the input stays visible in Safari */}
         <section
-          className="order-1 lg:order-2 rounded-2xl border border-white/[0.10] bg-white/[0.03] overflow-hidden flex flex-col h-[min(65vh,480px)] sm:h-[min(70vh,520px)] lg:h-[560px]"
-          aria-label="Current design"
-        >
-          <div className="flex-shrink-0 px-3 sm:px-4 py-3 border-b border-white/[0.08] bg-white/[0.02] min-h-[2.75rem] flex items-center justify-between gap-2">
-            <p className="text-[11px] text-white/55 uppercase tracking-wider font-semibold">
-              Current design
-            </p>
-            {hasEditedMockup && !isLoading && (
-              <span className="text-[10px] font-medium text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/25 rounded-full px-2 py-0.5">
-                Updated
-              </span>
-            )}
-          </div>
-
-          <div className="relative flex-1 min-h-0 bg-[#ececf0] flex items-center justify-center p-3 sm:p-5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              key={previewSrc}
-              src={previewSrc}
-              alt={hasEditedMockup ? "Current mockup" : product.name}
-              className="max-w-full max-h-full w-auto h-auto object-contain drop-shadow-md"
-            />
-            {isLoading && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#13111f]/60 backdrop-blur-sm">
-                <Loader2 size={28} className="text-violet-300 animate-spin" />
-                <p className="text-[12px] font-medium text-white/80">Generating…</p>
-              </div>
-            )}
-          </div>
-
-          <div className="flex-shrink-0 border-t border-white/[0.06] bg-[#13111f]/30 p-3 sm:p-4 space-y-2.5">
-            <p className="text-[10px] sm:text-[11px] text-white/45 text-center">
-              {hasEditedMockup
-                ? "This is your latest mockup — more edits update this view"
-                : "Catalogue photo — your edits will appear here"}
-            </p>
-            <button
-              type="button"
-              onClick={onDone}
-              disabled={isLoading || !hasEditedMockup}
-              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-[13px] shadow-lg shadow-emerald-900/20"
-            >
-              <Check size={16} />
-              Done
-            </button>
-          </div>
-        </section>
-
-        {/* Describe changes */}
-        <section
-          className="order-2 lg:order-1 rounded-2xl border border-white/[0.10] bg-white/[0.03] overflow-hidden flex flex-col h-[min(65vh,480px)] sm:h-[min(70vh,520px)] lg:h-[560px]"
+          className="order-1 rounded-2xl border border-white/[0.10] bg-white/[0.03] overflow-hidden flex flex-col min-h-0 h-[min(52vh,420px)] sm:h-[min(58vh,460px)] lg:h-[560px]"
           aria-label="Edit conversation"
         >
           <div className="flex-shrink-0 px-3 sm:px-4 py-3 border-b border-white/[0.08] bg-white/[0.02] min-h-[2.75rem] flex items-center">
@@ -185,9 +135,9 @@ export default function EditRequestChat({
             </p>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3 min-h-[120px]">
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-3 space-y-3">
             {messages.length === 0 && !isLoading && (
-              <div className="rounded-xl border border-dashed border-white/[0.10] bg-white/[0.02] px-4 py-5 text-center h-full flex flex-col items-center justify-center min-h-[120px]">
+              <div className="rounded-xl border border-dashed border-white/[0.10] bg-white/[0.02] px-4 py-5 text-center h-full min-h-[100px] flex flex-col items-center justify-center">
                 <Sparkles size={18} className="text-violet-400/60 mx-auto mb-2" />
                 <p className="text-[12px] text-white/45 leading-relaxed max-w-[260px] mx-auto">
                   e.g. &ldquo;Change Halifax to Cape Breton&rdquo; or &ldquo;Make the text bolder&rdquo;
@@ -265,6 +215,56 @@ export default function EditRequestChat({
                 <Send size={16} />
               </button>
             </div>
+          </div>
+        </section>
+
+        {/* Current design preview */}
+        <section
+          className="order-2 rounded-2xl border border-white/[0.10] bg-white/[0.03] overflow-hidden flex flex-col min-h-0 h-[min(52vh,420px)] sm:h-[min(58vh,460px)] lg:h-[560px]"
+          aria-label="Current design"
+        >
+          <div className="flex-shrink-0 px-3 sm:px-4 py-3 border-b border-white/[0.08] bg-white/[0.02] min-h-[2.75rem] flex items-center justify-between gap-2">
+            <p className="text-[11px] text-white/55 uppercase tracking-wider font-semibold">
+              Current design
+            </p>
+            {hasEditedMockup && !isLoading && (
+              <span className="text-[10px] font-medium text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/25 rounded-full px-2 py-0.5">
+                Updated
+              </span>
+            )}
+          </div>
+
+          <div className="relative flex-1 min-h-0 bg-[#ececf0] flex items-center justify-center p-3 sm:p-5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              key={previewSrc}
+              src={previewSrc}
+              alt={hasEditedMockup ? "Current mockup" : product.name}
+              className="max-w-full max-h-full w-auto h-auto object-contain drop-shadow-md"
+            />
+            {isLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#13111f]/60 backdrop-blur-sm">
+                <Loader2 size={28} className="text-violet-300 animate-spin" />
+                <p className="text-[12px] font-medium text-white/80">Generating…</p>
+              </div>
+            )}
+          </div>
+
+          <div className="flex-shrink-0 border-t border-white/[0.06] bg-[#13111f]/30 p-3 sm:p-4 space-y-2.5">
+            <p className="text-[10px] sm:text-[11px] text-white/45 text-center">
+              {hasEditedMockup
+                ? "This is your latest mockup — more edits update this view"
+                : "Catalogue photo — your edits will appear here"}
+            </p>
+            <button
+              type="button"
+              onClick={onDone}
+              disabled={isLoading || !hasEditedMockup}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-[13px] shadow-lg shadow-emerald-900/20"
+            >
+              <Check size={16} />
+              Done
+            </button>
           </div>
         </section>
       </div>
