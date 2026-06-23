@@ -38,6 +38,24 @@ export default function PdfImageImporter({
   const [images, setImages] = useState<ExtractedPdfImage[]>([]);
   const [truncated, setTruncated] = useState(false);
 
+  const SQUARE_ASPECT_MIN = 0.85;
+  const SQUARE_ASPECT_MAX = 1.18;
+  const MIN_SIDE_PX = 120;
+
+  const squareImages = images.filter((img) => {
+    const w = Math.max(img.width, 1);
+    const h = Math.max(img.height, 1);
+    const aspect = w / h;
+    const minSide = Math.min(w, h);
+    return (
+      aspect >= SQUARE_ASPECT_MIN &&
+      aspect <= SQUARE_ASPECT_MAX &&
+      minSide >= MIN_SIDE_PX
+    );
+  });
+
+  const filteredOutCount = Math.max(0, images.length - squareImages.length);
+
   const clearExtracted = useCallback(() => {
     revokeExtractedImages(extractedRef.current);
     extractedRef.current = [];
@@ -167,7 +185,7 @@ export default function PdfImageImporter({
                 {pdfName}
               </span>
               <span className="text-[11px] text-white/35 flex-shrink-0">
-                · {images.length} image{images.length !== 1 ? "s" : ""}
+                · {squareImages.length} image{squareImages.length !== 1 ? "s" : ""}
               </span>
             </div>
             <button
@@ -185,8 +203,26 @@ export default function PdfImageImporter({
             </p>
           )}
 
+
+          {squareImages.length === 0 ? (
+            <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
+              <AlertCircle size={16} className="text-amber-300 mt-0.5 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-amber-200/90 leading-relaxed">
+                  No square images were detected in this PDF. Try a different page/export, or a PDF where the artwork is a square.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleReplacePdf}
+                  className="mt-2 text-[11px] text-amber-200/80 hover:text-amber-100 underline"
+                >
+                  Try another PDF
+                </button>
+              </div>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch">
-            {images.map((img) => {
+            {squareImages.map((img) => {
               const isSelected = img.id === selectedId;
               return (
                 <div
@@ -258,6 +294,7 @@ export default function PdfImageImporter({
               );
             })}
           </div>
+          )}
         </>
       )}
 
