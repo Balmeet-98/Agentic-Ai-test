@@ -52,7 +52,25 @@ INVENTORY_CATEGORY_ALLOWLIST=
 # Optional — connect your artwork library backend
 # ARTWORK_API_URL=https://your-client-backend.com/api
 # ARTWORK_API_KEY=your_artwork_api_key_here
+
+# Shared PDF library (Supabase Storage + Postgres)
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+PDF_LIBRARY_TENANT_ID=default
 ```
+
+#### PDF library (Supabase)
+
+1. Create a Supabase project and add the env vars above to `.env.local` and Vercel.
+2. Run the SQL in [`supabase/pdf-library.sql`](supabase/pdf-library.sql) in the Supabase SQL editor.
+3. In Supabase **Storage**, create a **private** bucket named `pdf-library`.
+4. Restart the dev server. Uploaded PDFs appear under **PDF Import → Library** for all users on the same `PDF_LIBRARY_TENANT_ID`.
+
+If you see **permission denied for table pdf_documents**, run [`supabase/pdf-library-fix-permissions.sql`](supabase/pdf-library-fix-permissions.sql) in the SQL editor.
+
+Confirm `SUPABASE_SERVICE_ROLE_KEY` is the **service_role** secret (not the `anon` key) from Supabase → Project Settings → API.
+
+For multiple companies later, deploy separate instances or set a different `PDF_LIBRARY_TENANT_ID` per company.
 
 ### 3. Install & run
 

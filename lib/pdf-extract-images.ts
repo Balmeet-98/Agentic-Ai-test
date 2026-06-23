@@ -1,5 +1,6 @@
 "use client";
 
+import type { PDFPageProxy } from "pdfjs-dist";
 import { logUiError, logUiEvent, logUiWarning } from "@/lib/client-log";
 
 export interface ExtractedPdfImage {
@@ -10,25 +11,42 @@ export interface ExtractedPdfImage {
   height: number;
   pageNumber: number;
   regionIndex: number;
+  productType?: string | null;
+  labels?: string[];
+  description?: string | null;
+  isMerchandise?: boolean;
+  /** Set when loaded from Supabase library cache */
+  libraryImageId?: string;
 }
 
 export interface PdfExtractionResult {
   images: ExtractedPdfImage[];
   truncated: boolean;
+  pagesProcessed: number;
+  totalPages: number;
+  /** True when pixel-region fallback was used (may include catalogue text). */
+  usedRegionFallback: boolean;
 }
 
+export interface PdfExtractionProgress {
+  pageNum: number;
+  pageCount: number;
+}
+
+export type PdfExtractionProgressCallback = (progress: PdfExtractionProgress) => void;
+
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
-const MAX_PAGES = 40;
-const MAX_TOTAL_IMAGES = 120;
+const MAX_PAGES = 100;
 const MAX_REGIONS_PER_PAGE = 15;
 const MAX_RENDER_WIDTH = 1400;
+const MIN_EMBEDDED_IMAGE_PX = 80;
 const MIN_AREA_RATIO = 0.012;
 const MAX_AREA_RATIO = 0.78;
 const CROP_PADDING = 10;
 
 let workerConfigured = false;
 
-const EXTRACTION_TIMEOUT_MS = 120_000;
+const EXTRACTION_TIMEOUT_MS = 300_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -369,9 +387,171 @@ async function cropRegionToFile(
   );
 }
 
+interface PdfImageXObject {
+  width: number;
+  height: number;
+  bitmap?: ImageBitmap;
+  data?: Uint8Array | Uint8ClampedArray;
+  kind?: number;
+}
+
+async function resolveXObject(
+  page: PDFPageProxy,
+  name: string
+): Promise<PdfImageXObject | null> {
+  try {
+    const obj = await page.objs.get(name);
+    return obj?.width && obj?.height ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+async function xObjectToFile(
+  img: PdfImageXObject,
+  pageNumber: number,
+  imageIndex: number,
+  objectName: string
+): Promise<File | null> {
+  const { width, height } = img;
+  if (width < MIN_EMBEDDED_IMAGE_PX || height < MIN_EMBEDDED_IMAGE_PX) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  if (img.bitmap) {
+    ctx.drawImage(img.bitmap, 0, 0);
+  } else if (img.data) {
+    const { data } = img;
+    let rgba: Uint8ClampedArray;
+    if (data.length === width * height * 4) {
+      rgba = data as Uint8ClampedArray;
+    } else if (data.length === width * height * 3) {
+      rgba = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
+        rgba[j] = data[i]!;
+        rgba[j + 1] = data[i + 1]!;
+        rgba[j + 2] = data[i + 2]!;
+        rgba[j + 3] = 255;
+      }
+    } else {
+      return null;
+    }
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+  } else {
+    return null;
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png")
+  );
+  if (!blob) return null;
+
+  const safeName = objectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  return new File(
+    [blob],
+    `pdf-p${pageNumber}-img${imageIndex}-${safeName}.png`,
+    { type: "image/png" }
+  );
+}
+
+async function extractEmbeddedImagesFromPage(
+  page: PDFPageProxy,
+  pageNum: number,
+  OPS: Record<string, number>
+): Promise<ExtractedPdfImage[]> {
+  const imageOpCodes = new Set(
+    [
+      OPS.paintImageXObject,
+      OPS.paintJpegXObject,
+      OPS.paintImageXObjectRepeat,
+      OPS.paintImageMaskXObject,
+    ].filter((v): v is number => typeof v === "number")
+  );
+
+  const opList = await page.getOperatorList();
+  const seen = new Set<string>();
+  const results: ExtractedPdfImage[] = [];
+  let imageIndex = 0;
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    if (!imageOpCodes.has(fn)) continue;
+
+    const args = opList.argsArray[i];
+    const imgName = args?.[0];
+    if (typeof imgName !== "string" || seen.has(imgName)) continue;
+    seen.add(imgName);
+
+    const xobj = await resolveXObject(page, imgName);
+    if (!xobj) continue;
+
+    imageIndex++;
+    const file = await xObjectToFile(xobj, pageNum, imageIndex, imgName);
+    if (!file) continue;
+
+    results.push({
+      id: `pdf-p${pageNum}-img${imageIndex}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      width: xobj.width,
+      height: xobj.height,
+      pageNumber: pageNum,
+      regionIndex: imageIndex,
+    });
+  }
+
+  return results;
+}
+
+async function extractRegionsFromRenderedPage(
+  pdfPage: PDFPageProxy,
+  pageNum: number,
+  scale: number
+): Promise<ExtractedPdfImage[]> {
+  const viewport = pdfPage.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return [];
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await pdfPage.render({ canvas, canvasContext: ctx, viewport }).promise;
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pageArea = canvas.width * canvas.height;
+  let regions = findContentRegions(imageData, pageArea);
+  regions = refineRegions(imageData, regions, pageArea);
+  if (regions.length === 0) return [];
+
+  const results: ExtractedPdfImage[] = [];
+  let regionIndex = 0;
+  for (const region of regions) {
+    const file = await cropRegionToFile(canvas, region, pageNum, regionIndex);
+    if (!file) continue;
+    regionIndex++;
+    results.push({
+      id: `pdf-p${pageNum}-r${regionIndex}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      width: Math.floor(region.w / scale),
+      height: Math.floor(region.h / scale),
+      pageNumber: pageNum,
+      regionIndex,
+    });
+  }
+  return results;
+}
+
 /**
- * Renders each PDF page, detects individual product/artwork regions on white
- * backgrounds (typical catalogue layouts), and exports each as a separate PNG.
+ * Extracts embedded image XObjects from a PDF (primary path).
  */
 export async function extractEmbeddedImagesFromPdf(
   pdfFile: File
@@ -380,14 +560,16 @@ export async function extractEmbeddedImagesFromPdf(
   return result.images;
 }
 
-async function extractImagesFromPdfInternal(pdfFile: File): Promise<PdfExtractionResult> {
-  if (
-    pdfFile.type !== "application/pdf" &&
-    !pdfFile.name.toLowerCase().endsWith(".pdf")
-  ) {
+async function extractImagesFromPdfInternal(
+  data: ArrayBuffer,
+  fileName: string,
+  onProgress?: PdfExtractionProgressCallback
+): Promise<PdfExtractionResult> {
+  const lowerName = fileName.toLowerCase();
+  if (!lowerName.endsWith(".pdf")) {
     throw new Error("Please upload a PDF file.");
   }
-  if (pdfFile.size > MAX_PDF_BYTES) {
+  if (data.byteLength > MAX_PDF_BYTES) {
     throw new Error("PDF exceeds the 25 MB limit.");
   }
 
@@ -395,106 +577,87 @@ async function extractImagesFromPdfInternal(pdfFile: File): Promise<PdfExtractio
 
   let pdf;
   try {
-    const data = new Uint8Array(await pdfFile.arrayBuffer());
+    const bytes = new Uint8Array(data);
     // PDF.js v6+ loads optional decoders (JBIG2/OpenJPEG/QCMS) via `wasmUrl`.
     // Without this, some PDFs can hang or render incorrectly in Safari.
-    pdf = await pdfjs.getDocument({ data, wasmUrl: "/pdfjs-wasm/" }).promise;
+    pdf = await pdfjs.getDocument({ data: bytes, wasmUrl: "/pdfjs-wasm/" }).promise;
   } catch {
     throw new Error("Could not read this PDF. The file may be corrupt or password-protected.");
   }
 
   const results: ExtractedPdfImage[] = [];
-  let truncated = false;
-  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
-  if (pdf.numPages > MAX_PAGES) truncated = true;
+  const totalPages = pdf.numPages;
+  const truncated = totalPages > MAX_PAGES;
+  const pageCount = Math.min(totalPages, MAX_PAGES);
+  let usedRegionFallback = false;
 
   for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
-    if (results.length >= MAX_TOTAL_IMAGES) {
-      truncated = true;
-      break;
-    }
-
     await yieldToMain();
 
     logUiEvent("pdf.page_start", { pageNum, pageCount });
+    onProgress?.({ pageNum, pageCount });
 
     const page = await pdf.getPage(pageNum);
+    const embedded = await extractEmbeddedImagesFromPage(page, pageNum, pdfjs.OPS);
+
+    if (embedded.length > 0) {
+      results.push(...embedded);
+      continue;
+    }
+
+    usedRegionFallback = true;
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = Math.min(2, MAX_RENDER_WIDTH / Math.max(baseViewport.width, 1));
-    const viewport = page.getViewport({ scale });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.floor(viewport.width);
-    canvas.height = Math.floor(viewport.height);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) continue;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const pageArea = canvas.width * canvas.height;
-    let regions = findContentRegions(imageData, pageArea);
-    regions = refineRegions(imageData, regions, pageArea);
-
-    if (regions.length === 0) continue;
-
-    let regionIndex = 0;
-    for (const region of regions) {
-      if (results.length >= MAX_TOTAL_IMAGES) {
-        truncated = true;
-        break;
-      }
-
-      const file = await cropRegionToFile(canvas, region, pageNum, regionIndex);
-      if (!file) continue;
-
-      regionIndex++;
-      results.push({
-        id: `pdf-p${pageNum}-r${regionIndex}`,
-        file,
-        previewUrl: URL.createObjectURL(file),
-        width: Math.floor(region.w / scale),
-        height: Math.floor(region.h / scale),
-        pageNumber: pageNum,
-        regionIndex,
-      });
-    }
+    const regionImages = await extractRegionsFromRenderedPage(page, pageNum, scale);
+    results.push(...regionImages);
   }
 
   if (results.length === 0) {
     throw new Error(
-      "No individual images could be detected in this PDF. Pages may be full-bleed or use non-white backgrounds."
+      "No images could be extracted from this PDF. Try a catalogue PDF with embedded product photos."
     );
   }
 
-  return { images: results, truncated };
+  return {
+    images: results,
+    truncated,
+    pagesProcessed: pageCount,
+    totalPages,
+    usedRegionFallback,
+  };
 }
 
-export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtractionResult> {
+async function runExtractionWithLogging(
+  data: ArrayBuffer,
+  fileName: string,
+  fileSize: number,
+  fileType: string,
+  onProgress?: PdfExtractionProgressCallback
+): Promise<PdfExtractionResult> {
   if (typeof window === "undefined") {
     throw new Error("PDF extraction is only available in the browser.");
   }
 
   const startedAt = performance.now();
   logUiEvent("pdf.extract_start", {
-    fileName: pdfFile.name,
-    fileSize: pdfFile.size,
-    fileType: pdfFile.type || "unknown",
+    fileName,
+    fileSize,
+    fileType,
   });
 
   try {
     const result = await withTimeout(
-      extractImagesFromPdfInternal(pdfFile),
+      extractImagesFromPdfInternal(data, fileName, onProgress),
       EXTRACTION_TIMEOUT_MS,
       "PDF processing timed out. Try a smaller file or a different browser."
     );
 
     logUiEvent("pdf.extract_success", {
-      fileName: pdfFile.name,
+      fileName,
       imageCount: result.images.length,
       truncated: result.truncated,
+      pagesProcessed: result.pagesProcessed,
+      totalPages: result.totalPages,
       durationMs: Math.round(performance.now() - startedAt),
     });
 
@@ -507,20 +670,55 @@ export async function extractImagesFromPdf(pdfFile: File): Promise<PdfExtraction
 
     if (isTimeout) {
       logUiWarning("pdf.extract_timeout", error.message, {
-        fileName: pdfFile.name,
-        fileSize: pdfFile.size,
+        fileName,
+        fileSize,
         durationMs,
       });
     } else {
       logUiError("pdf.extract_error", error, {
-        fileName: pdfFile.name,
-        fileSize: pdfFile.size,
+        fileName,
+        fileSize,
         durationMs,
       });
     }
 
     throw error;
   }
+}
+
+export async function extractImagesFromPdfBlob(
+  data: ArrayBuffer,
+  fileName: string,
+  onProgress?: PdfExtractionProgressCallback
+): Promise<PdfExtractionResult> {
+  return runExtractionWithLogging(
+    data,
+    fileName,
+    data.byteLength,
+    "application/pdf",
+    onProgress
+  );
+}
+
+export async function extractImagesFromPdf(
+  pdfFile: File,
+  onProgress?: PdfExtractionProgressCallback
+): Promise<PdfExtractionResult> {
+  if (
+    pdfFile.type !== "application/pdf" &&
+    !pdfFile.name.toLowerCase().endsWith(".pdf")
+  ) {
+    throw new Error("Please upload a PDF file.");
+  }
+
+  const data = await pdfFile.arrayBuffer();
+  return runExtractionWithLogging(
+    data,
+    pdfFile.name,
+    pdfFile.size,
+    pdfFile.type || "unknown",
+    onProgress
+  );
 }
 
 export function revokeExtractedImages(images: ExtractedPdfImage[]) {

@@ -397,7 +397,7 @@ export default function Home() {
                     <div>
                       <p className="font-bold text-white/95 text-base">Import from PDF</p>
                       <p className="text-[12px] text-white/40 mt-0.5">
-                        Upload a PDF, pick an individual image, then edit it the same way
+                        Pick from the shared library or upload a new PDF, then select an image
                       </p>
                     </div>
                     {selectedPdfImage && (

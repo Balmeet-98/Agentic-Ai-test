@@ -11,6 +11,9 @@
     },
     "app/api/design-chat/route.ts": {
       "maxDuration": 60
+    },
+    "app/api/pdf-library/[id]/analyze/route.ts": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
