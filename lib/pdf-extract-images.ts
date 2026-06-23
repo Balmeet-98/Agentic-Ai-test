@@ -396,7 +396,9 @@ async function extractImagesFromPdfInternal(pdfFile: File): Promise<PdfExtractio
   let pdf;
   try {
     const data = new Uint8Array(await pdfFile.arrayBuffer());
-    pdf = await pdfjs.getDocument({ data }).promise;
+    // PDF.js v6+ loads optional decoders (JBIG2/OpenJPEG/QCMS) via `wasmUrl`.
+    // Without this, some PDFs can hang or render incorrectly in Safari.
+    pdf = await pdfjs.getDocument({ data, wasmUrl: "/pdfjs-wasm/" }).promise;
   } catch {
     throw new Error("Could not read this PDF. The file may be corrupt or password-protected.");
   }
