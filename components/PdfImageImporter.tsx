@@ -21,6 +21,7 @@ import {
 } from "@/lib/pdf-extract-images";
 import type { PdfDocument } from "@/lib/pdf-library-types";
 import { PDF_ANALYZE_BATCH_SIZE, PDF_ANALYZE_PARALLEL } from "@/lib/pdf-library-types";
+import { uploadPdfViaSignedUrl } from "@/lib/pdf-library-client-upload";
 import { logUiError } from "@/lib/client-log";
 import PdfLibraryBrowser from "@/components/PdfLibraryBrowser";
 
@@ -201,22 +202,47 @@ export default function PdfImageImporter({
   }, []);
 
   const savePdfToLibrary = useCallback(async (file: File, pageCount: number) => {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("title", file.name.replace(/\.pdf$/i, "") || file.name);
-    if (pageCount > 0) {
-      form.append("pageCount", String(pageCount));
+    const title = file.name.replace(/\.pdf$/i, "") || file.name;
+
+    const registerRes = await fetch("/api/pdf-library", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        fileName: file.name,
+        fileSize: file.size,
+        pageCount: pageCount > 0 ? pageCount : null,
+      }),
+    });
+
+    if (registerRes.status === 503) return null;
+
+    if (!registerRes.ok) {
+      const data = (await registerRes.json()) as { error?: string };
+      throw new Error(data.error ?? "Failed to register PDF upload.");
     }
 
-    const res = await fetch("/api/pdf-library", { method: "POST", body: form });
-    if (res.status === 503) return null;
+    const data = (await registerRes.json()) as {
+      document: { id: string };
+      signedUrl: string;
+      token: string;
+      storagePath: string;
+    };
 
-    if (!res.ok) {
-      const data = (await res.json()) as { error?: string };
-      throw new Error(data.error ?? "Failed to save PDF to library.");
+    try {
+      await uploadPdfViaSignedUrl(
+        data.signedUrl,
+        data.token,
+        data.storagePath,
+        file
+      );
+    } catch (uploadError) {
+      await fetch(`/api/pdf-library/${data.document.id}`, { method: "DELETE" }).catch(
+        () => undefined
+      );
+      throw uploadError;
     }
 
-    const data = (await res.json()) as { document: { id: string } };
     return data.document.id;
   }, []);
 

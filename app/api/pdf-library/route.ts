@@ -3,6 +3,7 @@ import {
   createPdfDocument,
   isPdfLibraryConfigured,
   listPdfDocuments,
+  registerPdfDocumentUpload,
 } from "@/lib/pdf-library-repository";
 import { MAX_PDF_UPLOAD_BYTES } from "@/lib/pdf-library-types";
 
@@ -27,6 +28,9 @@ export async function GET() {
   }
 }
 
+/** Vercel serverless body limit is ~4.5 MB — large PDFs must upload direct to Supabase. */
+const VERCEL_SAFE_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 export async function POST(req: NextRequest) {
   if (!isPdfLibraryConfigured()) {
     return NextResponse.json(
@@ -36,6 +40,55 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const contentType = req.headers.get("content-type") ?? "";
+
+    // Preferred: JSON register → client uploads PDF directly to Supabase (bypasses Vercel limit).
+    if (contentType.includes("application/json")) {
+      const body = (await req.json()) as {
+        title?: string;
+        fileName?: string;
+        fileSize?: number;
+        pageCount?: number | null;
+      };
+
+      const fileName = body.fileName?.trim();
+      if (!fileName || !fileName.toLowerCase().endsWith(".pdf")) {
+        return NextResponse.json({ error: "fileName must be a .pdf file." }, { status: 400 });
+      }
+
+      const fileSize = body.fileSize ?? 0;
+      if (fileSize <= 0) {
+        return NextResponse.json({ error: "fileSize is required." }, { status: 400 });
+      }
+      if (fileSize > MAX_PDF_UPLOAD_BYTES) {
+        return NextResponse.json(
+          { error: "PDF exceeds the 25 MB limit." },
+          { status: 400 }
+        );
+      }
+
+      const title =
+        body.title?.trim() || fileName.replace(/\.pdf$/i, "") || fileName;
+      const pageCount =
+        typeof body.pageCount === "number" && Number.isFinite(body.pageCount)
+          ? body.pageCount
+          : null;
+
+      const { document, signedUrl, token, storagePath } =
+        await registerPdfDocumentUpload({
+          title,
+          fileName,
+          fileSize,
+          pageCount,
+        });
+
+      return NextResponse.json(
+        { document, signedUrl, token, storagePath },
+        { status: 201 }
+      );
+    }
+
+    // Legacy multipart — only for small PDFs under Vercel's ~4.5 MB payload cap (local dev).
     const form = await req.formData();
     const file = form.get("file");
 
@@ -53,6 +106,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "PDF exceeds the 25 MB limit." },
         { status: 400 }
+      );
+    }
+
+    if (file.size > VERCEL_SAFE_UPLOAD_BYTES) {
+      return NextResponse.json(
+        {
+          error:
+            "PDF is too large for server upload on Vercel. Use direct Supabase upload (JSON register).",
+          code: "PAYLOAD_TOO_LARGE",
+        },
+        { status: 413 }
       );
     }
 

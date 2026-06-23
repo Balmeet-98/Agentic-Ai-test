@@ -82,6 +82,77 @@ export async function getPdfDocument(id: string): Promise<PdfDocument | null> {
   return data ? mapRow(data as PdfDocumentRow) : null;
 }
 
+export async function registerPdfDocumentUpload(params: {
+  title: string;
+  fileName: string;
+  fileSize: number;
+  pageCount?: number | null;
+}): Promise<{
+  document: PdfDocument;
+  signedUrl: string;
+  token: string;
+  storagePath: string;
+}> {
+  const tenantId = getPdfLibraryTenantId();
+  const supabase = getSupabaseAdmin();
+
+  if (params.fileSize > MAX_PDF_UPLOAD_BYTES) {
+    throw new Error("PDF exceeds the 25 MB limit.");
+  }
+
+  const id = crypto.randomUUID();
+  const storagePath = `${tenantId}/${id}.pdf`;
+
+  const { data: signData, error: signError } = await supabase.storage
+    .from(PDF_LIBRARY_BUCKET)
+    .createSignedUploadUrl(storagePath);
+
+  if (signError || !signData) {
+    throw new Error(
+      `Failed to create upload URL: ${signError?.message ?? "unknown error"}`
+    );
+  }
+
+  const { data, error } = await supabase
+    .from("pdf_documents")
+    .insert({
+      id,
+      tenant_id: tenantId,
+      title: params.title,
+      file_name: params.fileName,
+      storage_path: storagePath,
+      file_size: params.fileSize,
+      page_count: params.pageCount ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to save PDF metadata: ${error.message}`);
+  }
+
+  return {
+    document: mapRow(data as PdfDocumentRow),
+    signedUrl: signData.signedUrl,
+    token: signData.token,
+    storagePath,
+  };
+}
+
+export async function deletePdfDocument(id: string): Promise<void> {
+  const tenantId = getPdfLibraryTenantId();
+  const document = await getPdfDocument(id);
+  if (!document) return;
+
+  const supabase = getSupabaseAdmin();
+  await supabase.storage.from(PDF_LIBRARY_BUCKET).remove([document.storagePath]);
+  await supabase
+    .from("pdf_documents")
+    .delete()
+    .eq("id", id)
+    .eq("tenant_id", tenantId);
+}
+
 export async function createPdfDocument(params: {
   title: string;
   fileName: string;
