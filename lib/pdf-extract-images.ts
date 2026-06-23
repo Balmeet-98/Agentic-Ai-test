@@ -60,14 +60,53 @@ interface RegionRect {
   area: number;
 }
 
+async function ensurePdfWorkerAvailable(workerSrc: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    const res = await fetch(workerSrc, {
+      method: "GET",
+      headers: { Range: "bytes=0-127" },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok && res.status !== 206) {
+      throw new Error(
+        "PDF engine failed to load. Refresh the page and try again."
+      );
+    }
+
+    const snippet = (await res.text()).trimStart();
+    if (snippet.startsWith("<") || snippet.startsWith("<!")) {
+      throw new Error(
+        "PDF engine is misconfigured on this server. Please refresh or try another browser."
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        "PDF engine took too long to load. Check your connection and try again."
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function loadPdfJs() {
-  const pdfjs = await import("pdfjs-dist");
+  // Legacy build polyfills Map.getOrInsertComputed for older Safari (< 26.2).
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
   if (!workerConfigured && typeof window !== "undefined") {
     // Bundled import.meta.url worker paths break in Next.js and can hang Safari.
-    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    const workerSrc = "/pdf.worker.min.mjs";
+    await ensurePdfWorkerAvailable(workerSrc);
+    pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     workerConfigured = true;
-    logUiEvent("pdf.worker_configured", { workerSrc: "/pdf.worker.min.mjs" });
+    logUiEvent("pdf.worker_configured", { workerSrc });
   }
 
   return pdfjs;
@@ -374,6 +413,8 @@ async function extractImagesFromPdfInternal(pdfFile: File): Promise<PdfExtractio
     }
 
     await yieldToMain();
+
+    logUiEvent("pdf.page_start", { pageNum, pageCount });
 
     const page = await pdf.getPage(pageNum);
     const baseViewport = page.getViewport({ scale: 1 });

@@ -19,7 +19,7 @@
       "destination": "/api/:path*"
     },
     {
-      "source": "/((?!_next/static|_next/image|favicon.ico).*)",
+      "source": "/((?!_next/static|_next/image|favicon.ico|pdf.worker.min.mjs|products/).*)",
       "destination": "/"
     }
   ],
@@ -30,6 +30,13 @@
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET,POST,OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    },
+    {
+      "source": "/pdf.worker.min.mjs",
+      "headers": [
+        { "key": "Content-Type", "value": "text/javascript; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
       ]
     },
     {
