@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getImageFileBytes, isPdfImageLibraryConfigured } from "@/lib/pdf-image-repository";
 import { isPdfLibraryConfigured } from "@/lib/pdf-library-repository";
+import { removeBackgroundToWhiteDeterministic } from "@/lib/background-remove";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string; imageId: string }> }
 ) {
   if (!isPdfLibraryConfigured() || !isPdfImageLibraryConfigured()) {
@@ -16,6 +17,18 @@ export async function GET(
   try {
     const { id, imageId } = await params;
     const { bytes } = await getImageFileBytes(id, imageId);
+    const bg = req.nextUrl.searchParams.get("bg");
+
+    if (bg === "white") {
+      const det = await removeBackgroundToWhiteDeterministic(Buffer.from(bytes));
+      return new NextResponse(det.pngBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": "image/png",
+          "Cache-Control": "private, max-age=86400",
+        },
+      });
+    }
 
     return new NextResponse(bytes, {
       status: 200,

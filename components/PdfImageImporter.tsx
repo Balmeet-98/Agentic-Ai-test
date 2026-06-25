@@ -25,13 +25,34 @@ import { uploadPdfViaSignedUrl } from "@/lib/pdf-library-client-upload";
 import { logUiError } from "@/lib/client-log";
 import PdfLibraryBrowser from "@/components/PdfLibraryBrowser";
 
+interface PdfLibraryDocumentRef {
+  id: string;
+  title: string;
+}
+
 interface Props {
   selectedId: string | null;
   onSelect: (image: ExtractedPdfImage | null) => void;
   onConfirmSelection?: () => void;
+  /** Restores the image grid after remount (e.g. returning from edit step). */
+  resumeLibraryDocument?: PdfLibraryDocumentRef | null;
+  onResumeLibraryDocumentChange?: (doc: PdfLibraryDocumentRef | null) => void;
 }
 
 type ImportTab = "library" | "upload";
+
+type ProcessingPhase = "idle" | "loading" | "extracting" | "preparing" | "analyzing";
+
+const PROCESSING_MESSAGES: Record<Exclude<ProcessingPhase, "idle">, string[]> = {
+  loading: ["Loading catalogue…", "Fetching your PDF…"],
+  extracting: ["Reading your PDF…", "Extracting images…", "This may take a moment…"],
+  preparing: ["Preparing images…"],
+  analyzing: [
+    "AI is analyzing products — this may take a while",
+  ],
+};
+
+const MESSAGE_ROTATE_MS = 4500;
 
 interface ApiImageRecord {
   id: string;
@@ -49,6 +70,31 @@ interface ApiImageRecord {
 const IMAGE_PAGE_SIZE = 24;
 const SEARCH_DEBOUNCE_MS = 300;
 const LABEL_IMAGE_MAX_PX = 512;
+
+function duplicatePdfMessage(fileName: string): string {
+  return `"${fileName}" is already in the library. Select it from the Library tab instead of uploading again.`;
+}
+
+async function removeBackgroundFile(file: File): Promise<{ file: File; previewUrl: string }> {
+  const fd = new FormData();
+  fd.append("image", file, file.name);
+
+  const res = await fetch("/api/remove-background", { method: "POST", body: fd });
+  const data = (await res.json()) as { imageBase64?: string; mimeType?: string; error?: string };
+  if (!res.ok) throw new Error(data.error ?? "Failed to remove background.");
+  if (!data.imageBase64) throw new Error("No image returned from background removal.");
+
+  const mimeType = data.mimeType ?? "image/png";
+  const bin = atob(data.imageBase64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mimeType });
+
+  const fileName = file.name.replace(/\.(png|jpe?g|webp|gif)$/i, ".png");
+  const nextFile = new File([blob], fileName, { type: mimeType });
+  const previewUrl = URL.createObjectURL(blob);
+  return { file: nextFile, previewUrl };
+}
 
 async function resizeForLabeling(file: File): Promise<File> {
   if (file.size === 0) return file;
@@ -140,18 +186,20 @@ export default function PdfImageImporter({
   selectedId,
   onSelect,
   onConfirmSelection,
+  resumeLibraryDocument,
+  onResumeLibraryDocumentChange,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const extractedRef = useRef<ExtractedPdfImage[]>([]);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeAttemptedRef = useRef(false);
 
   const [importTab, setImportTab] = useState<ImportTab>("library");
   const [dragging, setDragging] = useState(false);
   const [pdfName, setPdfName] = useState<string | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
-  const [extracting, setExtracting] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [extractProgress, setExtractProgress] = useState<string | null>(null);
+  const [processingPhase, setProcessingPhase] = useState<ProcessingPhase>("idle");
+  const [processingMessageIndex, setProcessingMessageIndex] = useState(0);
   const [loadingLibraryId, setLoadingLibraryId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<ExtractedPdfImage[]>([]);
@@ -171,7 +219,33 @@ export default function PdfImageImporter({
     imagePage * IMAGE_PAGE_SIZE
   );
 
-  const busy = extracting || analyzing;
+  const busy = processingPhase !== "idle";
+
+  const processingMessage =
+    processingPhase === "idle"
+      ? null
+      : PROCESSING_MESSAGES[processingPhase][
+          processingMessageIndex % PROCESSING_MESSAGES[processingPhase].length
+        ];
+
+  useEffect(() => {
+    if (processingPhase === "idle") {
+      setProcessingMessageIndex(0);
+      return;
+    }
+    setProcessingMessageIndex(0);
+    const timer = setInterval(() => {
+      setProcessingMessageIndex((i) => i + 1);
+    }, MESSAGE_ROTATE_MS);
+    return () => clearInterval(timer);
+  }, [processingPhase]);
+
+  useEffect(() => {
+    if (!usedRegionFallback) return;
+    console.warn(
+      "[pdf] No embedded images were found — used page-region detection instead. Results may include catalogue text near products."
+    );
+  }, [usedRegionFallback]);
 
   const clearExtracted = useCallback(() => {
     revokeExtractedImages(extractedRef.current.filter((img) => !img.libraryImageId));
@@ -186,7 +260,8 @@ export default function PdfImageImporter({
     setFromCache(false);
     setSearchQuery("");
     onSelect(null);
-  }, [onSelect]);
+    onResumeLibraryDocumentChange?.(null);
+  }, [onSelect, onResumeLibraryDocumentChange]);
 
   useEffect(() => {
     return () => {
@@ -200,6 +275,44 @@ export default function PdfImageImporter({
     setImages(next);
     setImagePage(1);
   }, []);
+
+  const cleanExtractedImages = useCallback(
+    async (next: ExtractedPdfImage[]) => {
+      if (next.length === 0) return next;
+
+      setProcessingPhase("preparing");
+
+      const cleaned = [...next];
+      let done = 0;
+
+      await runWithConcurrency(cleaned, 3, async (img, index) => {
+        // Only for extracted/local images (they have a real File and typically a blob: preview).
+        if (!img.file || img.file.size === 0) {
+          done++;
+          return;
+        }
+
+        try {
+          const result = await removeBackgroundFile(img.file);
+
+          // Revoke old object URL previews (avoid memory leaks).
+          if (img.previewUrl?.startsWith("blob:")) {
+            URL.revokeObjectURL(img.previewUrl);
+          }
+
+          cleaned[index] = { ...img, file: result.file, previewUrl: result.previewUrl };
+        } catch (e) {
+          // Keep original image if background removal fails for this one.
+          logUiError("pdf.bg_remove_failed", e, { imageId: img.id });
+        } finally {
+          done++;
+        }
+      });
+
+      return cleaned;
+    },
+    []
+  );
 
   const savePdfToLibrary = useCallback(async (file: File, pageCount: number) => {
     const title = file.name.replace(/\.pdf$/i, "") || file.name;
@@ -216,6 +329,11 @@ export default function PdfImageImporter({
     });
 
     if (registerRes.status === 503) return null;
+
+    if (registerRes.status === 409) {
+      const data = (await registerRes.json()) as { error?: string };
+      throw new Error(data.error ?? duplicatePdfMessage(file.name));
+    }
 
     if (!registerRes.ok) {
       const data = (await registerRes.json()) as { error?: string };
@@ -255,8 +373,7 @@ export default function PdfImageImporter({
         batches.push(extracted.slice(i, i + PDF_ANALYZE_BATCH_SIZE));
       }
 
-      setAnalyzing(true);
-      let completedBatches = 0;
+      setProcessingPhase("analyzing");
 
       const sendBatch = async (batchIndex: number, batch: ExtractedPdfImage[]) => {
         const resized = await Promise.all(batch.map((img) => resizeForLabeling(img.file)));
@@ -282,14 +399,6 @@ export default function PdfImageImporter({
           const data = (await res.json()) as { error?: string };
           throw new Error(data.error ?? "Failed to analyze images.");
         }
-
-        completedBatches++;
-        const pct = Math.round((completedBatches / batches.length) * 100);
-        const start = (batchIndex) * PDF_ANALYZE_BATCH_SIZE + 1;
-        const end = Math.min((batchIndex + 1) * PDF_ANALYZE_BATCH_SIZE, extracted.length);
-        setExtractProgress(
-          `Analyzing ${completedBatches}/${batches.length} batches (${pct}%) · images ${start}–${end}…`
-        );
       };
 
       try {
@@ -319,8 +428,7 @@ export default function PdfImageImporter({
         applyImages(cached);
         setFromCache(true);
       } finally {
-        setAnalyzing(false);
-        setExtractProgress(null);
+        setProcessingPhase("idle");
       }
     },
     [applyImages]
@@ -354,10 +462,36 @@ export default function PdfImageImporter({
       setPdfName(title);
       setDocumentId(docId);
       setFromCache(true);
+      onResumeLibraryDocumentChange?.({ id: docId, title });
       return true;
     },
-    [applyImages]
+    [applyImages, onResumeLibraryDocumentChange]
   );
+
+  // Restore image grid when remounting after "Change product" (component unmounts on edit step).
+  useEffect(() => {
+    if (resumeAttemptedRef.current || !resumeLibraryDocument || pdfName) return;
+    resumeAttemptedRef.current = true;
+
+    void (async () => {
+      setDocumentId(resumeLibraryDocument.id);
+      setPdfName(resumeLibraryDocument.title);
+      setImportTab("library");
+      setLoadingLibraryId(resumeLibraryDocument.id);
+      setProcessingPhase("loading");
+
+      try {
+        await loadCachedImages(resumeLibraryDocument.id, resumeLibraryDocument.title);
+      } catch (e) {
+        logUiError("pdf.resume_library_failed", e, {
+          documentId: resumeLibraryDocument.id,
+        });
+      } finally {
+        setLoadingLibraryId(null);
+        setProcessingPhase("idle");
+      }
+    })();
+  }, [resumeLibraryDocument, pdfName, loadCachedImages]);
 
   const runSearch = useCallback(
     (query: string) => {
@@ -391,15 +525,14 @@ export default function PdfImageImporter({
       clearExtracted();
       setError(null);
       setPdfName(file.name);
-      setExtracting(true);
-      setExtractProgress("Extracting embedded images…");
+      setProcessingPhase("extracting");
 
       try {
-        const result = await extractImagesFromPdf(file, ({ pageNum, pageCount }) => {
-          setExtractProgress(`Extracting page ${pageNum} of ${pageCount}…`);
-        });
+        const result = await extractImagesFromPdf(file);
 
-        applyImages(result.images);
+        // Option B: deterministically remove background for every extracted image (no AI).
+        const cleaned = await cleanExtractedImages(result.images);
+        applyImages(cleaned);
         setTruncated(result.truncated);
         setUsedRegionFallback(result.usedRegionFallback);
         setPagesProcessed(result.pagesProcessed);
@@ -411,13 +544,30 @@ export default function PdfImageImporter({
             docId = await savePdfToLibrary(file, result.totalPages);
             if (docId) {
               setDocumentId(docId);
-              await analyzeAndPersist(docId, result.images);
+              const title = file.name.replace(/\.pdf$/i, "") || file.name;
+              onResumeLibraryDocumentChange?.({ id: docId, title });
+              const cached = await loadCachedImages(docId, title);
+              if (!cached) {
+                await analyzeAndPersist(docId, result.images);
+              }
             }
           } catch (saveError) {
-            logUiError("pdf.library_save_failed", saveError, {
-              fileName: file.name,
-              fileSize: file.size,
-            });
+            const message =
+              saveError instanceof Error
+                ? saveError.message
+                : "Failed to save PDF to the library.";
+            if (message.toLowerCase().includes("already in the library")) {
+              clearExtracted();
+              setPdfName(null);
+              setImportTab("library");
+              setError(message);
+            } else {
+              setError(message);
+              logUiError("pdf.library_save_failed", saveError, {
+                fileName: file.name,
+                fileSize: file.size,
+              });
+            }
           }
         }
       } catch (e: unknown) {
@@ -430,18 +580,10 @@ export default function PdfImageImporter({
           fileSize: file.size,
         });
       } finally {
-        setExtracting(false);
-        setExtractProgress(null);
+        setProcessingPhase("idle");
       }
     },
-    [applyImages, analyzeAndPersist, clearExtracted, savePdfToLibrary]
-  );
-
-  const processPdf = useCallback(
-    async (file: File) => {
-      await runExtractionFromFile(file, true);
-    },
-    [runExtractionFromFile]
+    [applyImages, analyzeAndPersist, clearExtracted, savePdfToLibrary, cleanExtractedImages, onResumeLibraryDocumentChange, loadCachedImages]
   );
 
   const handleLibraryDocument = useCallback(
@@ -450,15 +592,15 @@ export default function PdfImageImporter({
       setError(null);
       setPdfName(doc.title);
       setDocumentId(doc.id);
+      onResumeLibraryDocumentChange?.({ id: doc.id, title: doc.title });
       setLoadingLibraryId(doc.id);
-      setExtractProgress("Loading catalogue…");
+      setProcessingPhase("loading");
 
       try {
         const cached = await loadCachedImages(doc.id, doc.title);
         if (cached) return;
 
-        setExtracting(true);
-        setExtractProgress("Downloading PDF…");
+        setProcessingPhase("extracting");
 
         const res = await fetch(`/api/pdf-library/${doc.id}/file`, {
           cache: "no-store",
@@ -470,15 +612,11 @@ export default function PdfImageImporter({
         }
 
         const bytes = await res.arrayBuffer();
-        const result = await extractImagesFromPdfBlob(
-          bytes,
-          doc.fileName,
-          ({ pageNum, pageCount }) => {
-            setExtractProgress(`Extracting page ${pageNum} of ${pageCount}…`);
-          }
-        );
+        const result = await extractImagesFromPdfBlob(bytes, doc.fileName);
 
-        applyImages(result.images);
+        // Option B: deterministically remove background for every extracted image (no AI).
+        const cleaned = await cleanExtractedImages(result.images);
+        applyImages(cleaned);
         setTruncated(result.truncated);
         setUsedRegionFallback(result.usedRegionFallback);
         setPagesProcessed(result.pagesProcessed);
@@ -492,13 +630,33 @@ export default function PdfImageImporter({
         setPdfName(null);
         logUiError("pdf.library_open_failed", e, { documentId: doc.id });
       } finally {
-        setExtracting(false);
-        setAnalyzing(false);
-        setExtractProgress(null);
+        setProcessingPhase("idle");
         setLoadingLibraryId(null);
       }
     },
-    [analyzeAndPersist, applyImages, clearExtracted, loadCachedImages]
+    [analyzeAndPersist, applyImages, clearExtracted, loadCachedImages, cleanExtractedImages, onResumeLibraryDocumentChange]
+  );
+
+  const processPdf = useCallback(
+    async (file: File) => {
+      try {
+        const lookupRes = await fetch(
+          `/api/pdf-library?fileName=${encodeURIComponent(file.name)}`,
+          { cache: "no-store" }
+        );
+
+        if (lookupRes.ok) {
+          setImportTab("library");
+          setError(duplicatePdfMessage(file.name));
+          return;
+        }
+      } catch (e) {
+        logUiError("pdf.duplicate_lookup_failed", e, { fileName: file.name });
+      }
+
+      await runExtractionFromFile(file, true);
+    },
+    [runExtractionFromFile]
   );
 
   const handleSelectImage = useCallback(
@@ -543,30 +701,43 @@ export default function PdfImageImporter({
     if (inputRef.current) inputRef.current.value = "";
   };
 
+  const handleBackToPdfPicker = useCallback(
+    (targetTab: ImportTab) => {
+      clearExtracted();
+      setPdfName(null);
+      setError(null);
+      setImportTab(targetTab);
+      resumeAttemptedRef.current = false;
+    },
+    [clearExtracted]
+  );
+
   const handleReplacePdf = () => {
-    clearExtracted();
-    setPdfName(null);
-    setError(null);
-    if (importTab === "upload") {
-      inputRef.current?.click();
-    } else {
-      setImportTab("upload");
-      setTimeout(() => inputRef.current?.click(), 0);
+    handleBackToPdfPicker(documentId && fromCache ? "library" : "upload");
+  };
+
+  const handleImportTabChange = (tab: ImportTab) => {
+    if (pdfName) {
+      handleBackToPdfPicker(tab);
+      return;
     }
+    setImportTab(tab);
   };
 
   const showUploadDropzone = importTab === "upload" && !pdfName && !busy;
   const showLibrary = importTab === "library" && !pdfName && !busy;
+  const libraryTabActive = importTab === "library" && (!pdfName || fromCache);
+  const uploadTabActive = importTab === "upload" && (!pdfName || !fromCache);
 
   return (
     <div>
-      {!pdfName && !busy && (
+      {!busy && (
         <div className="flex gap-1 p-1 rounded-xl bg-white/[0.04] border border-white/[0.08] mb-4">
           <button
             type="button"
-            onClick={() => setImportTab("library")}
+            onClick={() => handleImportTabChange("library")}
             className={`flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12px] font-semibold transition-all ${
-              importTab === "library"
+              libraryTabActive
                 ? "bg-violet-600/80 text-white"
                 : "text-white/50 hover:text-white/75"
             }`}
@@ -576,9 +747,9 @@ export default function PdfImageImporter({
           </button>
           <button
             type="button"
-            onClick={() => setImportTab("upload")}
+            onClick={() => handleImportTabChange("upload")}
             className={`flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12px] font-semibold transition-all ${
-              importTab === "upload"
+              uploadTabActive
                 ? "bg-violet-600/80 text-white"
                 : "text-white/50 hover:text-white/75"
             }`}
@@ -631,9 +802,8 @@ export default function PdfImageImporter({
       {busy && (
         <div className="flex flex-col items-center justify-center py-12 gap-3">
           <Loader2 size={24} className="text-violet-400 animate-spin" />
-          <p className="text-sm text-white/60">
-            {extractProgress ??
-              (analyzing ? "AI analyzing images…" : "Extracting images…")}
+          <p className="text-sm text-white/60 text-center max-w-xs">
+            {processingMessage ?? "Working on your PDF…"}
           </p>
         </div>
       )}
@@ -669,10 +839,10 @@ export default function PdfImageImporter({
             </div>
             <button
               type="button"
-              onClick={handleReplacePdf}
+              onClick={() => handleBackToPdfPicker(fromCache ? "library" : "upload")}
               className="text-[11px] text-violet-300/80 hover:text-violet-200 transition-colors"
             >
-              Choose another PDF
+              {fromCache ? "Choose another PDF" : "Upload a different PDF"}
             </button>
           </div>
 
@@ -696,13 +866,6 @@ export default function PdfImageImporter({
                 />
               )}
             </div>
-          )}
-
-          {usedRegionFallback && (
-            <p className="text-[11px] text-amber-300/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
-              No embedded images were found — used page-region detection instead. Results may
-              include catalogue text near products.
-            </p>
           )}
 
           {truncated && (

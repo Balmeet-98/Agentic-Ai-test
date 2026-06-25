@@ -64,6 +64,16 @@ export async function listPdfDocuments(): Promise<PdfDocument[]> {
   return (data as PdfDocumentRow[]).map(mapRow);
 }
 
+export class DuplicatePdfDocumentError extends Error {
+  readonly existing: PdfDocument;
+
+  constructor(existing: PdfDocument) {
+    super(`A PDF named "${existing.fileName}" is already in the library.`);
+    this.name = "DuplicatePdfDocumentError";
+    this.existing = existing;
+  }
+}
+
 export async function getPdfDocument(id: string): Promise<PdfDocument | null> {
   const tenantId = getPdfLibraryTenantId();
   const supabase = getSupabaseAdmin();
@@ -77,6 +87,32 @@ export async function getPdfDocument(id: string): Promise<PdfDocument | null> {
 
   if (error) {
     throw new Error(`Failed to load PDF document: ${error.message}`);
+  }
+
+  return data ? mapRow(data as PdfDocumentRow) : null;
+}
+
+/** Case-insensitive match on original upload file name within the tenant. */
+export async function findPdfDocumentByFileName(
+  fileName: string
+): Promise<PdfDocument | null> {
+  const trimmed = fileName.trim();
+  if (!trimmed) return null;
+
+  const tenantId = getPdfLibraryTenantId();
+  const supabase = getSupabaseAdmin();
+
+  const { data, error } = await supabase
+    .from("pdf_documents")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .ilike("file_name", trimmed)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to look up PDF by file name: ${error.message}`);
   }
 
   return data ? mapRow(data as PdfDocumentRow) : null;
@@ -98,6 +134,11 @@ export async function registerPdfDocumentUpload(params: {
 
   if (params.fileSize > MAX_PDF_UPLOAD_BYTES) {
     throw new Error("PDF exceeds the 25 MB limit.");
+  }
+
+  const existing = await findPdfDocumentByFileName(params.fileName);
+  if (existing) {
+    throw new DuplicatePdfDocumentError(existing);
   }
 
   const id = crypto.randomUUID();
@@ -164,6 +205,11 @@ export async function createPdfDocument(params: {
 
   if (params.fileBytes.byteLength > MAX_PDF_UPLOAD_BYTES) {
     throw new Error("PDF exceeds the 25 MB limit.");
+  }
+
+  const existing = await findPdfDocumentByFileName(params.fileName);
+  if (existing) {
+    throw new DuplicatePdfDocumentError(existing);
   }
 
   const id = crypto.randomUUID();

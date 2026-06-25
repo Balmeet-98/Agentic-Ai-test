@@ -45,7 +45,7 @@ export async function GET(
         labels: img.labels,
         description: img.description,
         isMerchandise: img.isMerchandise,
-        previewUrl: `/api/pdf-library/${id}/images/${img.id}/file`,
+        previewUrl: `/api/pdf-library/${id}/images/${img.id}/file?bg=white`,
       })),
       total,
       filtered: images.length,

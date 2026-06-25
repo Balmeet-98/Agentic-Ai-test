@@ -42,6 +42,10 @@ export default function Home() {
   const [selectedProduct, setSelectedProduct] = useState<InventoryItem | null>(null);
   const [selectedPdfImage, setSelectedPdfImage] = useState<ExtractedPdfImage | null>(null);
   const selectedPdfImageRef = useRef<ExtractedPdfImage | null>(null);
+  const [pdfLibraryDocument, setPdfLibraryDocument] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +207,7 @@ export default function Home() {
     setImageSource("catalogue");
     setSelectedProduct(null);
     clearPdfSelection();
+    setPdfLibraryDocument(null);
     resetEditSession();
     setError(null);
   };
@@ -238,7 +243,12 @@ export default function Home() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 border-b border-white/[0.10] bg-[#13111f]/85 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5 flex-shrink-0">
+          <button
+            type="button"
+            onClick={handleReset}
+            aria-label="Back to start"
+            className="flex items-center gap-2.5 flex-shrink-0 text-left cursor-pointer"
+          >
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-violet-500/30">
               <Anchor size={14} className="text-white" />
             </div>
@@ -247,7 +257,7 @@ export default function Home() {
                 Tall Ships <span className="text-violet-400">Trading</span>
               </span>
             </div>
-          </div>
+          </button>
 
           {/* <div className="hidden md:flex items-center gap-2 text-[11px] text-white/50 bg-white/[0.07] border border-white/[0.12] rounded-full px-3.5 py-1.5">
             <Sparkles size={10} className="text-violet-400" />
@@ -345,7 +355,7 @@ export default function Home() {
                 }`}
               >
                 <Package size={15} />
-                Catalogue
+                Products
                 {selectedProduct && (
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
                 )}
@@ -410,6 +420,8 @@ export default function Home() {
                     selectedId={selectedPdfImage?.id ?? null}
                     onSelect={handleSelectPdfImage}
                     onConfirmSelection={handleConfirmPdfImage}
+                    resumeLibraryDocument={pdfLibraryDocument}
+                    onResumeLibraryDocumentChange={setPdfLibraryDocument}
                   />
                 </>
               )}

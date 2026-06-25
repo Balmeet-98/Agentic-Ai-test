@@ -144,6 +144,75 @@ async function callSingleImageModel(
   return extractImageFromResponse(response, model);
 }
 
+// ── Background removal (white matte) ──────────────────────────────────────────
+
+export interface RemoveBackgroundParams {
+  imageBase64: string;
+  imageMimeType: string;
+}
+
+/**
+ * Removes the background behind the main subject and replaces it with pure white.
+ * Intended to preserve the subject exactly; only the background should change.
+ */
+export async function removeBackgroundToWhite(
+  params: RemoveBackgroundParams
+): Promise<GenerateDesignResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set.");
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `You are an image background removal tool.
+
+TASK:
+- Remove ONLY the background behind the main subject.
+- Replace the background with a solid pure white background (#FFFFFF).
+
+CRITICAL REQUIREMENTS:
+- Do not change the subject at all (no edits to colors, text, shapes, lighting, contrast, sharpness, or geometry).
+- Do not add or remove any content from the subject.
+- Keep the subject in the exact same position and scale.
+- Keep edges clean and natural (no halos).
+- Output a single image only. No text. No watermark.`;
+
+  let lastError: unknown;
+
+  for (let m = 0; m < MODEL_CHAIN.length; m++) {
+    const model = MODEL_CHAIN[m];
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const result = await callSingleImageModel(
+          ai,
+          model,
+          prompt,
+          params.imageBase64,
+          params.imageMimeType
+        );
+        console.log(`[gemini bgremove] ✓ ${model} succeeded (attempt ${attempt + 1})`);
+        return result;
+      } catch (err) {
+        lastError = err;
+        if (isOverloaded(err)) {
+          const wait = (attempt + 1) * 3000;
+          console.warn(
+            `[gemini bgremove] ${model} overloaded (attempt ${attempt + 1}), retrying in ${wait}ms…`
+          );
+          await sleep(wait);
+          continue;
+        }
+        console.warn(
+          `[gemini bgremove] ${model} failed: ${err instanceof Error ? err.message : err}`
+        );
+        break;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Gemini background removal failed.");
+}
+
 /**
  * Composites a design onto a merchandise product image.
  * Accepts any product type: clothing, mugs, hats, bags, umbrellas, phone cases, etc.

@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   createPdfDocument,
+  DuplicatePdfDocumentError,
+  findPdfDocumentByFileName,
   isPdfLibraryConfigured,
   listPdfDocuments,
   registerPdfDocumentUpload,
 } from "@/lib/pdf-library-repository";
 import { MAX_PDF_UPLOAD_BYTES } from "@/lib/pdf-library-types";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   if (!isPdfLibraryConfigured()) {
     return NextResponse.json(
       {
@@ -20,6 +22,15 @@ export async function GET() {
   }
 
   try {
+    const fileName = req.nextUrl.searchParams.get("fileName")?.trim();
+    if (fileName) {
+      const document = await findPdfDocumentByFileName(fileName);
+      if (!document) {
+        return NextResponse.json({ error: "PDF not found." }, { status: 404 });
+      }
+      return NextResponse.json({ document });
+    }
+
     const documents = await listPdfDocuments();
     return NextResponse.json({ documents });
   } catch (error) {
@@ -141,6 +152,16 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ document }, { status: 201 });
   } catch (error) {
+    if (error instanceof DuplicatePdfDocumentError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: "DUPLICATE_PDF",
+          document: error.existing,
+        },
+        { status: 409 }
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to upload PDF.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
