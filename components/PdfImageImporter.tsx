@@ -49,6 +49,7 @@ const PROCESSING_MESSAGES: Record<Exclude<ProcessingPhase, "idle">, string[]> = 
   preparing: ["Preparing images…"],
   analyzing: [
     "AI is analyzing products — this may take a while",
+    "Still working — thanks for your patience",
   ],
 };
 
@@ -200,6 +201,7 @@ export default function PdfImageImporter({
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [processingPhase, setProcessingPhase] = useState<ProcessingPhase>("idle");
   const [processingMessageIndex, setProcessingMessageIndex] = useState(0);
+  const [processingPercent, setProcessingPercent] = useState(0);
   const [loadingLibraryId, setLoadingLibraryId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<ExtractedPdfImage[]>([]);
@@ -231,6 +233,7 @@ export default function PdfImageImporter({
   useEffect(() => {
     if (processingPhase === "idle") {
       setProcessingMessageIndex(0);
+      setProcessingPercent(0);
       return;
     }
     setProcessingMessageIndex(0);
@@ -239,6 +242,11 @@ export default function PdfImageImporter({
     }, MESSAGE_ROTATE_MS);
     return () => clearInterval(timer);
   }, [processingPhase]);
+
+  const finishProcessing = useCallback(() => {
+    setProcessingPercent(100);
+    setProcessingPhase("idle");
+  }, []);
 
   useEffect(() => {
     if (!usedRegionFallback) return;
@@ -283,12 +291,14 @@ export default function PdfImageImporter({
       setProcessingPhase("preparing");
 
       const cleaned = [...next];
+      const total = next.length;
       let done = 0;
 
       await runWithConcurrency(cleaned, 3, async (img, index) => {
         // Only for extracted/local images (they have a real File and typically a blob: preview).
         if (!img.file || img.file.size === 0) {
           done++;
+          setProcessingPercent(45 + Math.round((done / total) * 20));
           return;
         }
 
@@ -306,6 +316,7 @@ export default function PdfImageImporter({
           logUiError("pdf.bg_remove_failed", e, { imageId: img.id });
         } finally {
           done++;
+          setProcessingPercent(45 + Math.round((done / total) * 20));
         }
       });
 
@@ -374,6 +385,9 @@ export default function PdfImageImporter({
       }
 
       setProcessingPhase("analyzing");
+      setProcessingPercent(65);
+
+      let completedBatches = 0;
 
       const sendBatch = async (batchIndex: number, batch: ExtractedPdfImage[]) => {
         const resized = await Promise.all(batch.map((img) => resizeForLabeling(img.file)));
@@ -399,6 +413,9 @@ export default function PdfImageImporter({
           const data = (await res.json()) as { error?: string };
           throw new Error(data.error ?? "Failed to analyze images.");
         }
+
+        completedBatches++;
+        setProcessingPercent(65 + Math.round((completedBatches / batches.length) * 30));
       };
 
       try {
@@ -427,8 +444,9 @@ export default function PdfImageImporter({
         revokeExtractedImages(extractedRef.current.filter((img) => !img.libraryImageId));
         applyImages(cached);
         setFromCache(true);
+        setProcessingPercent(98);
       } finally {
-        setProcessingPhase("idle");
+        // Caller finishes the processing UI (finishProcessing).
       }
     },
     [applyImages]
@@ -479,6 +497,7 @@ export default function PdfImageImporter({
       setImportTab("library");
       setLoadingLibraryId(resumeLibraryDocument.id);
       setProcessingPhase("loading");
+      setProcessingPercent(8);
 
       try {
         await loadCachedImages(resumeLibraryDocument.id, resumeLibraryDocument.title);
@@ -488,10 +507,10 @@ export default function PdfImageImporter({
         });
       } finally {
         setLoadingLibraryId(null);
-        setProcessingPhase("idle");
+        finishProcessing();
       }
     })();
-  }, [resumeLibraryDocument, pdfName, loadCachedImages]);
+  }, [resumeLibraryDocument, pdfName, loadCachedImages, finishProcessing]);
 
   const runSearch = useCallback(
     (query: string) => {
@@ -526,9 +545,14 @@ export default function PdfImageImporter({
       setError(null);
       setPdfName(file.name);
       setProcessingPhase("extracting");
+      setProcessingPercent(15);
 
       try {
-        const result = await extractImagesFromPdf(file);
+        const result = await extractImagesFromPdf(file, ({ pageNum, pageCount }) => {
+          if (pageCount > 0) {
+            setProcessingPercent(15 + Math.round((pageNum / pageCount) * 30));
+          }
+        });
 
         // Option B: deterministically remove background for every extracted image (no AI).
         const cleaned = await cleanExtractedImages(result.images);
@@ -580,10 +604,10 @@ export default function PdfImageImporter({
           fileSize: file.size,
         });
       } finally {
-        setProcessingPhase("idle");
+        finishProcessing();
       }
     },
-    [applyImages, analyzeAndPersist, clearExtracted, savePdfToLibrary, cleanExtractedImages, onResumeLibraryDocumentChange, loadCachedImages]
+    [applyImages, analyzeAndPersist, clearExtracted, savePdfToLibrary, cleanExtractedImages, onResumeLibraryDocumentChange, loadCachedImages, finishProcessing]
   );
 
   const handleLibraryDocument = useCallback(
@@ -595,12 +619,14 @@ export default function PdfImageImporter({
       onResumeLibraryDocumentChange?.({ id: doc.id, title: doc.title });
       setLoadingLibraryId(doc.id);
       setProcessingPhase("loading");
+      setProcessingPercent(8);
 
       try {
         const cached = await loadCachedImages(doc.id, doc.title);
         if (cached) return;
 
         setProcessingPhase("extracting");
+        setProcessingPercent(15);
 
         const res = await fetch(`/api/pdf-library/${doc.id}/file`, {
           cache: "no-store",
@@ -612,7 +638,11 @@ export default function PdfImageImporter({
         }
 
         const bytes = await res.arrayBuffer();
-        const result = await extractImagesFromPdfBlob(bytes, doc.fileName);
+        const result = await extractImagesFromPdfBlob(bytes, doc.fileName, ({ pageNum, pageCount }) => {
+          if (pageCount > 0) {
+            setProcessingPercent(15 + Math.round((pageNum / pageCount) * 30));
+          }
+        });
 
         // Option B: deterministically remove background for every extracted image (no AI).
         const cleaned = await cleanExtractedImages(result.images);
@@ -630,11 +660,11 @@ export default function PdfImageImporter({
         setPdfName(null);
         logUiError("pdf.library_open_failed", e, { documentId: doc.id });
       } finally {
-        setProcessingPhase("idle");
+        finishProcessing();
         setLoadingLibraryId(null);
       }
     },
-    [analyzeAndPersist, applyImages, clearExtracted, loadCachedImages, cleanExtractedImages, onResumeLibraryDocumentChange]
+    [analyzeAndPersist, applyImages, clearExtracted, loadCachedImages, cleanExtractedImages, onResumeLibraryDocumentChange, finishProcessing]
   );
 
   const processPdf = useCallback(
@@ -800,11 +830,26 @@ export default function PdfImageImporter({
       )}
 
       {busy && (
-        <div className="flex flex-col items-center justify-center py-12 gap-3">
-          <Loader2 size={24} className="text-violet-400 animate-spin" />
-          <p className="text-sm text-white/60 text-center max-w-xs">
-            {processingMessage ?? "Working on your PDF…"}
-          </p>
+        <div className="flex items-center justify-center py-14 px-4">
+          <div className="w-full max-w-sm rounded-2xl border border-white/[0.10] bg-white/[0.04] px-6 py-8 flex flex-col items-center gap-5 shadow-lg shadow-black/20">
+            <div className="flex items-center justify-center w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/20">
+              <Loader2 size={26} className="text-violet-400 animate-spin" />
+            </div>
+            <div className="w-full space-y-3 text-center">
+              <p className="text-sm font-medium text-white/85 leading-snug px-1">
+                {processingMessage ?? "Working on your PDF…"}
+              </p>
+              <div className="w-full h-2 rounded-full bg-white/[0.08] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-[width] duration-500 ease-out"
+                  style={{ width: `${Math.min(100, Math.max(0, processingPercent))}%` }}
+                />
+              </div>
+              <p className="text-xs font-medium text-violet-300/90 tabular-nums">
+                {processingPercent}%
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
