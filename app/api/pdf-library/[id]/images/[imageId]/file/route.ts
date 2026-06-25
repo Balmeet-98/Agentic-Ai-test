@@ -21,7 +21,7 @@ export async function GET(
 
     if (bg === "white") {
       const det = await removeBackgroundToWhiteDeterministic(Buffer.from(bytes));
-      return new NextResponse(det.pngBuffer, {
+      return new NextResponse(new Uint8Array(det.pngBuffer), {
         status: 200,
         headers: {
           "Content-Type": "image/png",
